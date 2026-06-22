@@ -3,7 +3,10 @@ const cors = require('cors');
 const authRoutes = require('./routes/authRoutes');
 const financeRoutes = require('./routes/financeRoutes');
 const notificationRoutes = require('./routes/notificationRoutes'); 
+const connectDB = require('./config/db');
 
+
+connectDB()
 const app = express();
 
 app.use(express.json());
