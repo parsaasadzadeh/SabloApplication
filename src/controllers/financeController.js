@@ -156,3 +156,65 @@ exports.payInstallment = async (req, res) => {
         res.status(500).json({ message: 'خطای سرور', error: error.message });
     }
 };
+
+
+
+
+// ۵. ویرایش تراکنش (عنوان، مبلغ، توضیحات، دسته‌بندی، تاریخ سررسید)
+exports.updateTransaction = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { amount, title, description, category, dueDate } = req.body;
+
+        if (amount !== undefined && amount <= 0) {
+            return res.status(400).json({ message: 'مبلغ باید بیشتر از صفر باشد' });
+        }
+
+        // فقط فیلدهایی که واقعا ارسال شدن آپدیت میشن
+        const updateFields = {};
+        if (amount !== undefined) updateFields.amount = amount;
+        if (title !== undefined) updateFields.title = title;
+        if (description !== undefined) updateFields.description = description;
+        if (category !== undefined) updateFields.category = category;
+        if (dueDate !== undefined) updateFields.dueDate = dueDate;
+
+        const updatedTx = await Transaction.findOneAndUpdate(
+            { _id: id, userId: req.user.id }, // فقط صاحب تراکنش بتونه ویرایش کنه
+            updateFields,
+            { new: true, runValidators: true }
+        );
+
+        if (!updatedTx) {
+            return res.status(404).json({ message: 'تراکنش مورد نظر یافت نشد' });
+        }
+
+        res.status(200).json({ message: 'تراکنش با موفقیت ویرایش شد', transaction: updatedTx });
+    } catch (error) {
+        res.status(500).json({ message: 'خطای سرور', error: error.message });
+    }
+};
+
+// ۶. حذف تراکنش
+exports.deleteTransaction = async (req, res) => {
+    try {
+        const { id } = req.params;
+
+        const transaction = await Transaction.findOne({ _id: id, userId: req.user.id });
+
+        if (!transaction) {
+            return res.status(404).json({ message: 'تراکنش مورد نظر یافت نشد' });
+        }
+
+        // اگر تراکنش از نوع وام (LOAN) باشه، اقساط وابسته به اون هم حذف میشن
+        // (در غیر این صورت اقساط بی‌صاحب باقی می‌مونن و آمار به هم می‌ریزه)
+        if (transaction.type === 'LOAN') {
+            await Transaction.deleteMany({ loanId: transaction._id, userId: req.user.id });
+        }
+
+        await Transaction.deleteOne({ _id: id });
+
+        res.status(200).json({ message: 'تراکنش با موفقیت حذف شد' });
+    } catch (error) {
+        res.status(500).json({ message: 'خطای سرور', error: error.message });
+    }
+};
