@@ -1,26 +1,35 @@
-const Notification = require('../models/Notification');
+const Notification=require("../models/Notification");
 
-// دریافت لیست پیام‌های کاربر
-exports.getMyNotifications = async (req, res) => {
-    try {
-        const notifications = await Notification.find({ userId: req.user.id })
-            .sort({ createdAt: -1 }) // جدیدترین‌ها اول باشن
-            .limit(20); // فقط 20 تای آخر رو بده که اپ سنگین نشه
+exports.getMyNotifications=async(req,res)=>{
 
-        const unreadCount = await Notification.countDocuments({ userId: req.user.id, isRead: false });
+    const notifications=await Notification.find({
+        userId:req.user.id
+    })
+    .sort({createdAt:-1});
 
-        res.status(200).json({ unreadCount, notifications });
-    } catch (error) {
-        res.status(500).json({ message: 'خطای سرور', error: error.message });
-    }
+    const unreadCount=await Notification.countDocuments({
+        userId:req.user.id,
+        isRead:false
+    });
+
+    res.json({
+        notifications,
+        unreadCount
+    });
+
 };
 
-// تغییر وضعیت پیام به خوانده شده (وقتی کاربر پیام رو باز میکنه)
-exports.markAsRead = async (req, res) => {
-    try {
-        await Notification.findByIdAndUpdate(req.params.id, { isRead: true });
-        res.status(200).json({ message: 'پیام خوانده شد' });
-    } catch (error) {
-        res.status(500).json({ message: 'خطای سرور', error: error.message });
-    }
+exports.markAsRead=async(req,res)=>{
+
+    await Notification.findByIdAndUpdate(
+        req.params.id,
+        {
+            isRead:true
+        }
+    );
+
+    res.json({
+        success:true
+    });
+
 };
