@@ -1,1 +1,5 @@
-
+{
+  "crons": [
+    { "path": "/api/cron/check-installments", "schedule": "30 2 * * *" }
+  ]
+}
