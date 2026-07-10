@@ -1,50 +1,29 @@
-const mongoose = require("mongoose");
+const mongoose = require('mongoose');
 
-const notificationSchema = new mongoose.Schema(
-  {
-    userId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "User",
-      required: true,
-      index: true,
+const transactionSchema = new mongoose.Schema({
+    userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+    type: { 
+        type: String, 
+        enum: ['INCOME', 'EXPENSE', 'INSTALLMENT', 'LOAN'], 
+        required: true 
     },
+    amount: { type: Number, required: true },
+    title: { type: String, required: true },
+    description: { type: String },
+    
+    // دسته‌بندی برای تراکنش‌ها (مثلاً: حقوق، اجاره خانه، رستوران)
+    category: { type: String, default: 'عمومی' }, 
+    
+    // اگر تراکنش از نوع قسط (INSTALLMENT) باشه، به کدام وام وصله؟
+    loanId: { type: mongoose.Schema.Types.ObjectId, ref: 'Transaction', default: null },
+    
+    dueDate: { type: Date }, // تاریخ سررسید قسط یا یادآوری وام
+    isPaid: { type: Boolean, default: false }, // وضعیت پرداخت (مخصوص اقساط)
+    
+    date: { type: Date, default: Date.now }
+}, { timestamps: true });
 
-    relatedTransactionId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "Transaction",
-    },
+// برای سرعت بالای سرچ بر اساس کاربر و تاریخ
+transactionSchema.index({ userId: 1, date: -1 });
 
-    title: {
-      type: String,
-      required: true,
-    },
-
-    message: {
-      type: String,
-      required: true,
-    },
-
-    stage: {
-      type: String,
-      enum: ["3days", "1day", "today"],
-      required: true,
-    },
-
-    isRead: {
-      type: Boolean,
-      default: false,
-    },
-  },
-  {
-    timestamps: true,
-  }
-);
-
-notificationSchema.index({
-    relatedTransactionId:1,
-    stage:1
-},{
-    unique:true
-});
-
-module.exports = mongoose.model("Notification", notificationSchema);
+module.exports = mongoose.model('Transaction', transactionSchema);
