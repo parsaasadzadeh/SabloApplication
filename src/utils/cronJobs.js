@@ -1,97 +1,43 @@
-const cron = require("node-cron");
-const Transaction = require("../models/Transaction");
-const Notification = require("../models/Notification");
+const cron = require('node-cron');
+const Transaction = require('../models/Transaction');
+const Notification = require('../models/Notification');
 
-function diffDays(date){
+// این تابع هر روز ساعت 08:00 صبح اجرا میشه
+const startCronJobs = () => {
+    cron.schedule('0 6 * * *', async () => {
+        console.log('⏳ در حال بررسی اقساط نزدیک به سررسید...');
+        
+        try {
+            // پیدا کردن تاریخ 3 روز آینده
+            const threeDaysFromNow = new Date();
+            threeDaysFromNow.setDate(threeDaysFromNow.getDate() + 3);
 
-    const today=new Date();
-    today.setHours(0,0,0,0);
-
-    const due=new Date(date);
-    due.setHours(0,0,0,0);
-
-    return Math.floor(
-        (due-today)/(1000*60*60*24)
-    );
-
-}
-
-const createNotification=async(transaction,stage)=>{
-
-    const exists=await Notification.findOne({
-        relatedTransactionId:transaction._id,
-        stage
-    });
-
-    if(exists) return;
-
-    let title="یادآوری پرداخت قسط";
-
-    let message="";
-
-    if(stage==="3days"){
-        message=`تنها ۳ روز تا سررسید قسط ${transaction.amount.toLocaleString()} تومان باقی مانده است.`;
-    }
-
-    if(stage==="1day"){
-        message=`فقط ۱ روز تا سررسید قسط ${transaction.amount.toLocaleString()} تومان باقی مانده است.`;
-    }
-
-    if(stage==="today"){
-        message=`امروز آخرین مهلت پرداخت قسط ${transaction.amount.toLocaleString()} تومان است.`;
-    }
-
-    await Notification.create({
-        userId:transaction.userId,
-        relatedTransactionId:transaction._id,
-        title,
-        message,
-        stage
-    });
-
-    console.log("Notification Created");
-};
-
-const startCronJobs=()=>{
-
-    // هر روز ساعت ۶ صبح
-    cron.schedule("0 6 * * *",async()=>{
-
-        console.log("Checking Installments...");
-
-        try{
-
-            const transactions=await Transaction.find({
-                type:"INSTALLMENT",
-                isPaid:false
+            // پیدا کردن تمام اقساطی که پرداخت نشدن و تاریخشون برای ۳ روز آینده یا کمتره
+            const dueInstallments = await Transaction.find({
+                type: 'INSTALLMENT',
+                isPaid: false,
+                dueDate: { $lte: threeDaysFromNow } // کوچکتر یا مساوی 3 روز دیگه
             });
 
-            for(const item of transactions){
-
-                const days=diffDays(item.dueDate);
-
-                if(days===3){
-                    await createNotification(item,"3days");
+            for (let installment of dueInstallments) {
+                // چک می‌کنیم که آیا قبلاً برای این قسط پیام ساختیم که اسپم نشه؟
+                const existingNotif = await Notification.findOne({ relatedTransactionId: installment._id });
+                
+                if (!existingNotif) {
+                    // اگر پیامی نبود، یکی براش می‌سازیم
+                    await Notification.create({
+                        userId: installment.userId,
+                        title: 'یادآوری پرداخت قسط ⚠️',
+                        message: `کاربر عزیز، موعد پرداخت قسط شما به مبلغ ${installment.amount.toLocaleString()} تومان نزدیک است. لطفا نسبت به پرداخت آن اقدام کنید.`,
+                        relatedTransactionId: installment._id
+                    });
+                    console.log(`✅ اعلان برای کاربر ${installment.userId} ثبت شد.`);
                 }
-
-                if(days===1){
-                    await createNotification(item,"1day");
-                }
-
-                if(days===0){
-                    await createNotification(item,"today");
-                }
-
             }
-
-        }catch(err){
-
-            console.error(err);
-
+        } catch (error) {
+            console.error('❌ خطا در سیستم یادآوری اقساط:', error);
         }
-
     });
-
 };
 
-module.exports=startCronJobs;
+module.exports = startCronJobs;
