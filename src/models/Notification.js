@@ -4,14 +4,28 @@ const notificationSchema = new mongoose.Schema({
     userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
     title: { type: String, required: true },
     message: { type: String, required: true },
-    isRead: { type: Boolean, default: false }, // آیا کاربر پیام رو خونده؟
-    
-    // برای اینکه چک کنیم آیا قبلا برای این قسط پیام دادیم یا نه، آیدی قسط رو هم ذخیره می‌کنیم
+    isRead: { type: Boolean, default: false },
+
     relatedTransactionId: { type: mongoose.Schema.Types.ObjectId, ref: 'Transaction', default: null },
-    
-    createdAt: { type: Date, default: Date.now }
+
+    // مشخص می‌کنه این اعلان مربوط به کدوم مرحله یادآوریه (۳ روز قبل / ۲ روز قبل / روز سررسید)
+    // برای اعلان‌های دستی یا غیرمرتبط با قسط، مقدارش null می‌مونه
+    reminderType: {
+        type: String,
+        enum: ['3_DAYS_BEFORE', '2_DAYS_BEFORE', 'DUE_DATE'],
+        default: null,
+    },
+
+    createdAt: { type: Date, default: Date.now },
 });
 
+// جلوگیری از ساخت دو اعلان یکسان برای یک قسط (مثلاً دو بار «۲ روز قبل»)
+// sparse: true یعنی این قانون فقط وقتی reminderType مقدار داره اعمال می‌شه
+notificationSchema.index(
+    { relatedTransactionId: 1, reminderType: 1 },
+    { unique: true, sparse: true }
+);
+
 module.exports =
-  mongoose.models.Notification ||
-  mongoose.model('Notification', notificationSchema);
+    mongoose.models.Notification ||
+    mongoose.model('Notification', notificationSchema);
