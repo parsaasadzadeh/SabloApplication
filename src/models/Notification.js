@@ -29,7 +29,7 @@ notificationSchema.index(
 // MongoDB خودش هر حدود ۶۰ ثانیه یک بار این رکوردهای منقضی‌شده رو پاک می‌کنه
 notificationSchema.index(
     { createdAt: 1 },
-    { expireAfterSeconds: 20 * 24 * 60 * 60 }
+    { expireAfterSeconds: 60  }
 );
 
 module.exports =
