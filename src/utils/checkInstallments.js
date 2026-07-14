@@ -1,5 +1,4 @@
 // مسیر: src/utils/checkInstallments.js
-
 const Transaction = require('../models/Transaction');
 const Notification = require('../models/Notification');
 
@@ -21,7 +20,7 @@ function daysUntil(dueDate) {
 const REMINDERS = [
     { daysLeft: 3, type: '3_DAYS_BEFORE', title: 'یادآوری پرداخت قسط ⚠️' },
     { daysLeft: 2, type: '2_DAYS_BEFORE', title: 'یادآوری پرداخت قسط ⚠️' },
-    { daysLeft: 1, type: '1_DAY_BEFORE', title: 'یادآوری پرداخت قسط ⚠️' }, // خط جدید
+    { daysLeft: 1, type: '1_DAY_BEFORE', title: 'یادآوری پرداخت قسط ⚠️' },
     { daysLeft: 0, type: 'DUE_DATE', title: 'امروز موعد پرداخت قسط شماست ⏰' },
 ];
 
@@ -50,7 +49,7 @@ async function checkInstallments() {
                 title: reminder.title,
                 message: `کاربر عزیز، ${
                     reminder.daysLeft === 0 ? 'امروز' : `${reminder.daysLeft} روز دیگر`
-                } موعد پرداخت قسط شما به مبلغ ${installment.amount.toLocaleString()} تومان است.`,
+                } موعد پرداخت قسط «${installment.title}» به مبلغ ${installment.amount.toLocaleString()} تومان است.`,
                 relatedTransactionId: installment._id,
                 reminderType: reminder.type,
             });
