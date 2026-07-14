@@ -21,6 +21,7 @@ function daysUntil(dueDate) {
 const REMINDERS = [
     { daysLeft: 3, type: '3_DAYS_BEFORE', title: 'یادآوری پرداخت قسط ⚠️' },
     { daysLeft: 2, type: '2_DAYS_BEFORE', title: 'یادآوری پرداخت قسط ⚠️' },
+    { daysLeft: 1, type: '1_DAY_BEFORE', title: 'یادآوری پرداخت قسط ⚠️' }, // خط جدید
     { daysLeft: 0, type: 'DUE_DATE', title: 'امروز موعد پرداخت قسط شماست ⏰' },
 ];
 
