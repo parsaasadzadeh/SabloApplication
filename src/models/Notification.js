@@ -10,11 +10,11 @@ const notificationSchema = new mongoose.Schema({
 
     // مشخص می‌کنه این اعلان مربوط به کدوم مرحله یادآوریه (۳ روز قبل / ۲ روز قبل / روز سررسید)
     // برای اعلان‌های دستی یا غیرمرتبط با قسط، مقدارش null می‌مونه
-    reminderType: {
-        type: String,
-        enum: ['3_DAYS_BEFORE', '2_DAYS_BEFORE', 'DUE_DATE'],
-        default: null,
-    },
+reminderType: {
+    type: String,
+    enum: ['3_DAYS_BEFORE', '2_DAYS_BEFORE', '1_DAY_BEFORE', 'DUE_DATE'], // یک مورد اضافه شد
+    default: null,
+},
 
     createdAt: { type: Date, default: Date.now },
 });
