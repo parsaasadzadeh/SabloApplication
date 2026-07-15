@@ -20,6 +20,6 @@
     "mongoose": "^9.7.1",
     "node-cron": "^4.4.1", 
     "axios" : "^1.18.1" , 
-    "expo-server-sdk": "^6.1.0",
+    "expo-server-sdk": "^6.1.0"
   }
 }
