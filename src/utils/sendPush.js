@@ -1,10 +1,22 @@
 // مسیر پیشنهادی: src/utils/sendPush.js
 // پیش‌نیاز: npm install expo-server-sdk
+//
+// نکته: نسخه‌ی جدید expo-server-sdk به‌صورت ESM هست، پس نمی‌شه با require() عادی
+// لودش کرد. به همین خاطر از import() پویا (dynamic import) استفاده می‌کنیم که
+// داخل فایل‌های CommonJS هم مشکلی نداره.
 
-const { Expo } = require('expo-server-sdk');
 const User = require('../models/User');
 
-const expo = new Expo();
+let expoInstance = null;
+
+// فقط بار اول Expo رو لود و کش می‌کنه، دفعات بعد از همون نسخه‌ی کش‌شده استفاده می‌کنه
+async function getExpo() {
+    if (!expoInstance) {
+        const { Expo } = await import('expo-server-sdk');
+        expoInstance = new Expo();
+    }
+    return expoInstance;
+}
 
 /**
  * برای یک کاربر خاص (با userId) پوش نوتیفیکیشن واقعی می‌فرسته.
@@ -17,6 +29,9 @@ async function sendPushToUser(userId, { title, body, data = {} }) {
             console.log(`ℹ️ کاربر ${userId} توکن پوش ثبت‌شده نداره، ارسال انجام نشد.`);
             return;
         }
+
+        const { Expo } = await import('expo-server-sdk');
+        const expo = await getExpo();
 
         const messages = [];
         for (const pushToken of user.pushTokens) {
@@ -46,7 +61,6 @@ async function sendPushToUser(userId, { title, body, data = {} }) {
                 ticketChunk.forEach((ticket, i) => {
                     if (ticket.status === 'error') {
                         console.error(`❌ خطای ارسال پوش:`, ticket.message, ticket.details);
-                        // اگه توکن دیگه معتبر نیست (مثلاً کاربر اپ رو حذف کرده)، بعداً حذفش می‌کنیم
                         if (ticket.details?.error === 'DeviceNotRegistered') {
                             invalidTokens.push(chunk[i].to);
                         }
@@ -57,7 +71,6 @@ async function sendPushToUser(userId, { title, body, data = {} }) {
             }
         }
 
-        // توکن‌های منقضی‌شده رو از دیتابیس پاک کن تا دفعه‌ی بعد دوباره خطا نده
         if (invalidTokens.length > 0) {
             await User.updateOne(
                 { _id: userId },
