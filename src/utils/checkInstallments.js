@@ -1,8 +1,6 @@
 // مسیر: src/utils/checkInstallments.js
 const Transaction = require('../models/Transaction');
 const Notification = require('../models/Notification');
-const { sendPushToUser } = require('./sendPush'); // <-- جدید
-
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 // تاریخ رو به نیمه‌شب می‌بریم تا فقط «روز» مقایسه بشه، نه ساعت دقیق
 function startOfDay(date) {
@@ -37,27 +35,17 @@ async function checkInstallments() {
         const reminder = REMINDERS.find((r) => r.daysLeft === diff);
         if (!reminder) continue;
         try {
-            const message = `کاربر عزیز، ${
-                reminder.daysLeft === 0 ? 'امروز' : `${reminder.daysLeft} روز دیگر`
-            } موعد پرداخت قسط «${installment.title}» به مبلغ ${installment.amount.toLocaleString()} تومان است.`;
-
             await Notification.create({
                 userId: installment.userId,
                 title: reminder.title,
-                message,
+                message: `کاربر عزیز، ${
+                    reminder.daysLeft === 0 ? 'امروز' : `${reminder.daysLeft} روز دیگر`
+                } موعد پرداخت قسط «${installment.title}» به مبلغ ${installment.amount.toLocaleString()} تومان است.`,
                 relatedTransactionId: installment._id,
                 reminderType: reminder.type,
             });
             result.created++;
             console.log(`✅ اعلان (${reminder.type}) برای کاربر ${installment.userId} ثبت شد.`);
-
-            // ── ارسال پوش واقعی به گوشی کاربر (جدید) ────────────────────────────
-            // عمداً await نمی‌کنیم که اگه ارسال پوش کند/خطا بود، بقیه‌ی اقساط منتظر نمونن
-            sendPushToUser(installment.userId, {
-                title: reminder.title,
-                body: message,
-                data: { relatedTransactionId: String(installment._id), reminderType: reminder.type },
-            }).catch((err) => console.error('❌ خطا در ارسال پوش:', err.message));
         } catch (error) {
             if (error.code !== 11000) {
                 console.error(`❌ خطا در ساخت اعلان قسط ${installment._id}:`, error.message);
