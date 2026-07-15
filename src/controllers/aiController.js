@@ -49,3 +49,19 @@ exports.getAiAnalysis = async (req, res) => {
         res.status(500).json({ message: 'خطا در دریافت تحلیل هوش مصنوعی', error: error.message });
     }
 };
+
+exports.getAiStatus = async (req, res) => {
+    try {
+        const user = await User.findById(req.user.id);
+        const todayStr = new Date().toISOString().slice(0, 10);
+        const usedToday = user.lastAiAnalysisAt &&
+            user.lastAiAnalysisAt.toISOString().slice(0, 10) === todayStr;
+
+        res.status(200).json({
+            usedToday,
+            lastResult: usedToday ? user.lastAiAnalysisResult : null
+        });
+    } catch (error) {
+        res.status(500).json({ message: 'خطای سرور', error: error.message });
+    }
+};
