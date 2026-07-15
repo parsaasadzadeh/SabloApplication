@@ -7,6 +7,8 @@ const client = new OpenAI({
     baseURL: 'https://api.gapgpt.app/v1'
 });
 
+const toToman = (rial) => Math.round(rial / 10);
+
 exports.getAiAnalysis = async (req, res) => {
     try {
         const user = await User.findById(req.user.id);
@@ -26,16 +28,18 @@ exports.getAiAnalysis = async (req, res) => {
 
         const stats = await calculateUserStats(req.user.id);
 
-        const prompt = `شما یک مشاور مالی هستید. بر اساس اطلاعات زیر یک تحلیل کوتاه و کاربردی (حداکثر 100 کلمه) به زبان فارسی بنویس، بدون مقدمه:
-- موجودی خالص: ${stats.cashBalance} ریال
-- کل درآمد: ${stats.totalIncome} ریال
-- کل مخارج: ${stats.totalExpense} ریال
-- بدهی باقی‌مانده: ${stats.activeDebt} ریال`;
+        const prompt = `شما یک مشاور مالی هستید. اعداد زیر بر حسب تومان است:
+- موجودی خالص: ${toToman(stats.cashBalance)} تومان
+- کل درآمد: ${toToman(stats.totalIncome)} تومان
+- کل مخارج: ${toToman(stats.totalExpense)} تومان
+- بدهی باقی‌مانده: ${toToman(stats.activeDebt)} تومان
+
+یک تحلیل کوتاه و کاربردی حداکثر 50 کلمه به زبان فارسی بنویس، بدون مقدمه و بدون تکرار اعداد بالا در متن.`;
 
         const response = await client.chat.completions.create({
             model: 'gapgpt-qwen-3.6',
             messages: [{ role: 'user', content: prompt }],
-            max_tokens: 400
+            max_tokens: 150
         });
 
         const analysisText = response.choices[0].message.content;
