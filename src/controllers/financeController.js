@@ -52,6 +52,49 @@ exports.getMyTransactions = async (req, res) => {
     }
 };
 
+//  برای ai استفاده میکینم 
+exports.calculateUserStats = async (userId) => {
+    const stats = await Transaction.aggregate([
+        { $match: { userId: new mongoose.Types.ObjectId(userId) } },
+        { $facet: {
+            "totals": [
+                { $group: {
+                    _id: "$type",
+                    totalAmount: { $sum: { $cond: [
+                        { $eq: ["$type", "INSTALLMENT"] },
+                        { $cond: ["$isPaid", "$amount", 0] },
+                        "$amount"
+                    ]}}
+                }}
+            ],
+            "unpaidInstallments": [
+                { $match: { type: "INSTALLMENT", isPaid: false } },
+                { $group: { _id: null, totalRemaining: { $sum: "$amount" }, count: { $sum: 1 } } }
+            ]
+        }}
+    ]);
+
+    const rawTotals = stats[0].totals;
+    const unpaid = stats[0].unpaidInstallments[0] || { totalRemaining: 0, count: 0 };
+    let income = 0, expense = 0, loans = 0, installmentsPaid = 0;
+    rawTotals.forEach(item => {
+        if (item._id === 'INCOME') income = item.totalAmount;
+        if (item._id === 'EXPENSE') expense = item.totalAmount;
+        if (item._id === 'LOAN') loans = item.totalAmount;
+        if (item._id === 'INSTALLMENT') installmentsPaid = item.totalAmount;
+    });
+
+    return {
+        cashBalance: (income + loans) - (expense + installmentsPaid),
+        totalIncome: income,
+        totalExpense: expense,
+        activeDebt: loans - installmentsPaid,
+        unpaidInstallmentsCount: unpaid.count,
+        unpaidInstallmentsAmount: unpaid.totalRemaining
+    };
+};
+
+
 // ۳. مغز سیستم: محاسبات آماری دقیق و پیشرفته با Aggregation MongoDB
 exports.getFinanceStats = async (req, res) => {
     try {
