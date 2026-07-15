@@ -5,5 +5,5 @@ const { protect } = require('../middlewares/authMiddleware');
 
 router.use(protect);
 router.post('/analyze', getAiAnalysis);
-
+router.get('/status', getAiStatus);
 module.exports = router;
