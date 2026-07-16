@@ -1,29 +1,25 @@
-// مسیر: src/utils/pushService.js
-const { Expo } = require('expo-server-sdk');
 const User = require('../models/User');
 
-const expo = new Expo();
+let expoInstance = null;
+async function getExpo() {
+    if (!expoInstance) {
+        const { Expo } = await import('expo-server-sdk');
+        expoInstance = new Expo();
+    }
+    return expoInstance;
+}
 
-/**
- * ارسال نوتیف به یک کاربر خاص (روی همه‌ی دستگاه‌هایی که ثبت کرده)
- * @param {string} userId
- * @param {{title: string, body: string, data?: object}} payload
- */
 async function sendPushToUser(userId, { title, body, data = {} }) {
+    const expo = await getExpo();
+    const { Expo } = await import('expo-server-sdk');
+
     const user = await User.findById(userId).select('pushTokens');
     if (!user || !user.pushTokens?.length) return;
 
     const messages = [];
     for (const { token } of user.pushTokens) {
         if (!Expo.isExpoPushToken(token)) continue;
-        messages.push({
-            to: token,
-            sound: 'default',
-            title,
-            body,
-            data,
-            priority: 'high',
-        });
+        messages.push({ to: token, sound: 'default', title, body, data, priority: 'high' });
     }
 
     if (!messages.length) return;
@@ -44,7 +40,6 @@ async function sendPushToUser(userId, { title, body, data = {} }) {
         }
     }
 
-    // پاک‌سازی توکن‌های نامعتبر (کاربر اپ رو حذف کرده یا permission رو برداشته)
     if (invalidTokens.length) {
         await User.updateOne(
             { _id: userId },
