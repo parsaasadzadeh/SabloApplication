@@ -19,7 +19,7 @@ async function sendPushToUser(userId, { title, body, data = {} }) {
     const messages = [];
     for (const { token } of user.pushTokens) {
         if (!Expo.isExpoPushToken(token)) continue;
-        messages.push({ to: token, sound: 'default', title, body, data, priority: 'high' });
+        messages.push({ to: token, sound: 'default', title, body, data, priority: 'high'  , channelId: 'default' });
     }
 
     if (!messages.length) return;
