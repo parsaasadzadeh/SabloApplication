@@ -1,10 +1,8 @@
-// مسیر: src/controllers/pushController.js
 const User = require('../models/User');
-const { Expo } = require('expo-server-sdk');
 
-// ثبت یا آپدیت توکن پوش کاربر
 exports.registerPushToken = async (req, res) => {
     try {
+        const { Expo } = await import('expo-server-sdk');
         const { pushToken, platform } = req.body;
 
         if (!pushToken || !Expo.isExpoPushToken(pushToken)) {
@@ -15,7 +13,6 @@ exports.registerPushToken = async (req, res) => {
         }
 
         const user = await User.findById(req.user.id);
-
         const existing = user.pushTokens.find((t) => t.token === pushToken);
         if (existing) {
             existing.updatedAt = new Date();
@@ -31,7 +28,6 @@ exports.registerPushToken = async (req, res) => {
     }
 };
 
-// حذف توکن (مثلاً موقع لاگ‌اوت)
 exports.removePushToken = async (req, res) => {
     try {
         const { pushToken } = req.body;
