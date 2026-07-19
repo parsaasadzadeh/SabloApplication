@@ -1,7 +1,7 @@
 // src/utils/checkInstallments.js
 const Transaction = require('../models/Transaction');
 const Notification = require('../models/Notification');
-const User         = require('../models/User');
+const User = require('../models/User');
 const { sendPushNotifications } = require('./pushService');
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
