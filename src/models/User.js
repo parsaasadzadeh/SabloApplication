@@ -6,6 +6,7 @@ const userSchema = new mongoose.Schema({
     name: { type: String, default: "" },
     lastAiAnalysisAt: { type: Date, default: null },      
     lastAiAnalysisResult: { type: String, default: '' }, 
+    pushToken: { type: String, default: null },
     createdAt: { type: Date, default: Date.now }
 });
 
