@@ -1,35 +1,36 @@
 // src/utils/pushService.js
-const { Expo } = require('expo-server-sdk');
-const expo = new Expo();
+const axios = require('axios');
 
-/**
- * ارسال push notification به یک یا چند کاربر
- * @param {Array<{token: string, title: string, body: string, data?: object}>} messages
- */
 async function sendPushNotifications(messages) {
-    const chunks = expo.chunkPushNotifications(
-        messages
-            .filter(m => Expo.isExpoPushToken(m.token))
-            .map(m => ({
-                to:    m.token,
-                sound: 'default',
-                title: m.title,
-                body:  m.body,
-                data:  m.data || {},
-                priority: 'high',
-            }))
-    );
+    const EXPO_PUSH_URL = 'https://exp.host/--/api/v2/push/send';
 
-    const tickets = [];
-    for (const chunk of chunks) {
-        try {
-            const ticketChunk = await expo.sendPushNotificationsAsync(chunk);
-            tickets.push(...ticketChunk);
-        } catch (err) {
-            console.error('❌ خطا در ارسال push:', err.message);
-        }
+    const validMessages = messages
+        .filter(m => m.token && m.token.startsWith('ExponentPushToken['))
+        .map(m => ({
+            to:       m.token,
+            sound:    'default',
+            title:    m.title,
+            body:     m.body,
+            data:     m.data || {},
+            priority: 'high',
+        }));
+
+    if (validMessages.length === 0) return [];
+
+    try {
+        const response = await axios.post(EXPO_PUSH_URL, validMessages, {
+            headers: {
+                'Accept':       'application/json',
+                'Content-Type': 'application/json',
+            },
+        });
+
+        console.log(`📲 ${validMessages.length} push ارسال شد.`);
+        return response.data.data || [];
+    } catch (err) {
+        console.error('❌ خطا در ارسال push:', err.message);
+        return [];
     }
-    return tickets;
 }
 
 module.exports = { sendPushNotifications };
