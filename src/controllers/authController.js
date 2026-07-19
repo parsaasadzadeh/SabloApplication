@@ -70,3 +70,18 @@ exports.updateProfile = async (req, res) => {
         res.status(500).json({ message: 'خطای سرور', error: error.message });
     }
 };
+
+
+
+// در authController.js این function رو اضافه کن
+exports.savePushToken = async (req, res) => {
+    try {
+        const { pushToken } = req.body;
+        if (!pushToken) return res.status(400).json({ message: 'توکن ارسال نشده' });
+
+        await User.findByIdAndUpdate(req.user.id, { pushToken });
+        res.status(200).json({ message: 'توکن ذخیره شد' });
+    } catch (error) {
+        res.status(500).json({ message: 'خطای سرور', error: error.message });
+    }
+};
