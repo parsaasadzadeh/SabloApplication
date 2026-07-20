@@ -72,16 +72,20 @@ exports.updateProfile = async (req, res) => {
 };
 
 
-
-// در authController.js این function رو اضافه کن
 exports.savePushToken = async (req, res) => {
     try {
         const { pushToken } = req.body;
+        console.log('📲 [PushToken] pushToken دریافت شد:', pushToken);
+        console.log('👤 [PushToken] userId:', req.user?.id);
+        
         if (!pushToken) return res.status(400).json({ message: 'توکن ارسال نشده' });
 
-        await User.findByIdAndUpdate(req.user.id, { pushToken });
+        const result = await User.findByIdAndUpdate(req.user.id, { pushToken }, { new: true });
+        console.log('✅ [PushToken] ذخیره شد در DB:', result?.pushToken);
+        
         res.status(200).json({ message: 'توکن ذخیره شد' });
     } catch (error) {
+        console.error('❌ [PushToken] خطا:', error.message);
         res.status(500).json({ message: 'خطای سرور', error: error.message });
     }
 };
