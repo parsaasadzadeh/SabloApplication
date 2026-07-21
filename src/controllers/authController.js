@@ -71,3 +71,16 @@ exports.updateProfile = async (req, res) => {
     }
 };
 
+// src/controllers/authController.js — این function رو اضافه کن
+exports.savePushToken = async (req, res) => {
+    try {
+        const { expoPushToken } = req.body;
+        if (!expoPushToken) {
+            return res.status(400).json({ message: 'توکن push الزامی است' });
+        }
+        await User.findByIdAndUpdate(req.user.id, { expoPushToken });
+        res.status(200).json({ message: 'توکن با موفقیت ذخیره شد' });
+    } catch (error) {
+        res.status(500).json({ message: 'خطای سرور', error: error.message });
+    }
+};
