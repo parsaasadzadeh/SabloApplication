@@ -9,6 +9,10 @@ router.post('/verify-otp', verifyOtp);
 router.put('/complete-profile', protect, updateProfile);
 
 // src/routes/authRoutes.js — یه خط اضافه کن
-
+// در authRoutes.js
+router.post('/log', async (req, res) => {
+  console.log('📱 [Mobile Log]:', req.body.message);
+  res.status(200).json({ ok: true });
+});
 router.put('/push-token', protect, savePushToken); // 👈 اضافه کن
 module.exports = router;
