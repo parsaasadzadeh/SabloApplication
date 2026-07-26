@@ -6,11 +6,11 @@ const { protect } = require('../middlewares/authMiddleware');
 router.use(protect); 
 
 router.post('/add', addTransaction);
-router.get('/my-data', getMyTransactions); // این روت صفحه بندی (Pagination) خواهد داشت
-router.get('/stats', getFinanceStats); // آمار فوق حرفه‌ای و دقیق دیتابیس
-router.put('/pay-installment/:id', payInstallment); // تسویه یا پرداخت قسط
-router.put('/update/:id', updateTransaction);      // جدید: ویرایش تراکنش
-router.delete('/delete/:id', deleteTransaction);   // جدید: حذف تراکنش
+router.get('/my-data', getMyTransactions);
+router.get('/stats', getFinanceStats); 
+router.put('/pay-installment/:id', payInstallment); //   پرداخت قسط
+router.put('/update/:id', updateTransaction);  
+router.delete('/delete/:id', deleteTransaction);  
 
   
 module.exports = router;
