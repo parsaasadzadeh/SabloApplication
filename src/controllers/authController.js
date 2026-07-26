@@ -3,13 +3,12 @@ const Otp = require('../models/Otp');
 const jwt = require('jsonwebtoken');
 const { sendOtp } = require('../utils/smsService');
 
-// درخواست کد OTP (حالا واقعا از طریق sms.ir ارسال می‌شود)
 exports.requestOtp = async (req, res) => {
     try {
         const { phone } = req.body;
         if (!phone) return res.status(400).json({ message: 'شماره موبایل الزامی است' });
         const code = Math.floor(10000 + Math.random() * 90000).toString();
-        // ابتدا پیامک رو ارسال می‌کنیم، اگه ناموفق بود کد رو ذخیره نمی‌کنیم
+
         const smsResult = await sendOtp(phone, code);
         if (!smsResult.success) {
             return res.status(502).json({
@@ -17,16 +16,15 @@ exports.requestOtp = async (req, res) => {
                 error: smsResult.error
             });
         }
+        
         await Otp.deleteMany({ phone });
         await Otp.create({ phone, code });
-        // نکته: دیگه کد رو توی پاسخ برنمی‌گردونیم - این یه مشکل امنیتی بود
         res.status(200).json({ message: 'کد با موفقیت ارسال شد' });
     } catch (error) {
         res.status(500).json({ message: 'خطای سرور', error: error.message });
     }
 };
 
-// تایید کد و ورود/ثبت‌نام اولیه (بدون نیاز به نام)
 exports.verifyOtp = async (req, res) => {
     try {
         const { phone, code } = req.body;
@@ -47,14 +45,15 @@ exports.verifyOtp = async (req, res) => {
             message: 'با موفقیت وارد شدید',
             token,
             user,
-            needsProfileCompletion // فرانت با این مقدار می‌فهمه باید بره به صفحه complete-profile
+            needsProfileCompletion 
         });
     } catch (error) {
         res.status(500).json({ message: 'خطای سرور', error: error.message });
     }
 };
 
-// آپدیت نام کاربر (برای استفاده در مسیر complete-profile و ویرایش پروفایل)
+
+//update user
 exports.updateProfile = async (req, res) => {
     try {
         const { name } = req.body;
@@ -71,7 +70,6 @@ exports.updateProfile = async (req, res) => {
     }
 };
 
-// src/controllers/authController.js — این function رو اضافه کن
 exports.savePushToken = async (req, res) => {
     try {
         const { expoPushToken } = req.body;
