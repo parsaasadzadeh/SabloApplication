@@ -1,8 +1,7 @@
-// src/utils/checkInstallments.js
 const Transaction = require('../models/Transaction');
 const Notification = require('../models/Notification');
 const User = require('../models/User');
-const { sendExpoPush } = require('./pushService'); // 👈 اضافه شد
+const { sendExpoPush } = require('./pushService');
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
@@ -38,7 +37,6 @@ async function checkInstallments() {
         dueDate: { $lte: upperBound },
     });
 
-    // یه بار همه userهای مربوطه رو بگیر (به جای N تا query)
     const userIds = [...new Set(installments.map(i => i.userId.toString()))];
     const users = await User.find({ _id: { $in: userIds } }).select('_id expoPushToken');
     const userMap = {};
@@ -64,7 +62,6 @@ async function checkInstallments() {
             });
             result.created++;
 
-            // 👇 بعد از ذخیره در DB، push بفرست
             const pushToken = userMap[installment.userId.toString()];
             if (pushToken) {
                 await sendExpoPush(pushToken, reminder.title, messageText);
