@@ -1,10 +1,11 @@
 const Transaction = require('../models/Transaction');
 const mongoose = require('mongoose');
 
-// ۱. ثبت تراکنش جدید (با پشتیبانی از اتصال قسط به وام)
+
+//ثبت تراکنش جدید
 exports.addTransaction = async (req, res) => {
     try {
-        const { type, amount, title, description, dueDate, loanId } = req.body; // ❌ category حذف شد
+        const { type, amount, title, description, dueDate, loanId } = req.body;   
 
         if (amount <= 0) {
             return res.status(400).json({ message: 'مبلغ باید بیشتر از صفر باشد' });
@@ -27,7 +28,7 @@ exports.addTransaction = async (req, res) => {
     }
 };
 
-// ۲. دریافت لیست تراکنش‌ها به صورت صفحه‌بندی شده (جلوگیری از کندی سرور)
+//دریافت لیست 
 exports.getMyTransactions = async (req, res) => {
     try {
         const page = parseInt(req.query.page) || 1;
@@ -52,7 +53,7 @@ exports.getMyTransactions = async (req, res) => {
     }
 };
 
-//  برای ai استفاده میکینم 
+// تحلیل گر هوش مصنوعی
 exports.calculateUserStats = async (userId) => {
     const stats = await Transaction.aggregate([
         { $match: { userId: new mongoose.Types.ObjectId(userId) } },
@@ -95,7 +96,7 @@ exports.calculateUserStats = async (userId) => {
 };
 
 
-// ۳. مغز سیستم: محاسبات آماری دقیق و پیشرفته با Aggregation MongoDB
+// محاسبات حساب
 exports.getFinanceStats = async (req, res) => {
     try {
         const userId = new mongoose.Types.ObjectId(req.user.id);
@@ -104,10 +105,7 @@ exports.getFinanceStats = async (req, res) => {
             { $match: { userId: userId } },
             {
                 $facet: {
-                    // بخش اول: محاسبه مجموع دریافتی‌ها و مخارج بر اساس نوع تراکنش
-                    // ⚠️ نکته مهم: برای نوع INSTALLMENT فقط مقادیری که isPaid=true هستن جمع زده می‌شن
-                    // در غیر این صورت قسط‌های پرداخت‌نشده هم از موجودی کم می‌شدن (باگ قبلی)
-                    "totals": [
+                            "totals": [
                         {
                             $group: {
                                 _id: "$type",
@@ -123,7 +121,6 @@ exports.getFinanceStats = async (req, res) => {
                             }
                         }
                     ],
-                    // بخش دوم: وضعیت اقساط پرداخت نشده
                     "unpaidInstallments": [
                         { $match: { type: "INSTALLMENT", isPaid: false } },
                         {
@@ -134,7 +131,6 @@ exports.getFinanceStats = async (req, res) => {
                             }
                         }
                     ]
-                    // ❌ فacet "expenseCategories" حذف شد چون دیگه category نداریم
                 }
             }
         ]);
@@ -148,14 +144,11 @@ exports.getFinanceStats = async (req, res) => {
             if (item._id === 'INCOME') income = item.totalAmount;
             if (item._id === 'EXPENSE') expense = item.totalAmount;
             if (item._id === 'LOAN') loans = item.totalAmount;
-            if (item._id === 'INSTALLMENT') installmentsPaid = item.totalAmount; // فقط اقساط پرداخت‌شده
+            if (item._id === 'INSTALLMENT') installmentsPaid = item.totalAmount; 
         });
 
-        // فرمول‌های استاندارد حسابداری:
-        // موجودی نقدی = (درآمدها + وام‌های گرفته شده) - (مخارج عادی + اقساط *پرداخت‌شده*)
         const cashBalance = (income + loans) - (expense + installmentsPaid);
         
-        // کل بدهی فعلی کاربر = وام‌های دریافتی - اقساطی که تا الان واقعاً پرداخت کرده
         const activeDebt = loans - installmentsPaid;
 
         res.status(200).json({
@@ -174,7 +167,6 @@ exports.getFinanceStats = async (req, res) => {
     }
 };
 
-// ۴. تغییر وضعیت قسط به پرداخت‌شده
 exports.payInstallment = async (req, res) => {
     try {
         const installmentId = req.params.id;
@@ -195,11 +187,10 @@ exports.payInstallment = async (req, res) => {
     }
 };
 
-// ۵. ویرایش تراکنش (عنوان، مبلغ، توضیحات، تاریخ سررسید)
 exports.updateTransaction = async (req, res) => {
     try {
         const { id } = req.params;
-        const { amount, title, description, dueDate } = req.body; // ❌ category حذف شد
+        const { amount, title, description, dueDate } = req.body; 
 
         if (amount !== undefined && amount <= 0) {
             return res.status(400).json({ message: 'مبلغ باید بیشتر از صفر باشد' });
@@ -227,7 +218,7 @@ exports.updateTransaction = async (req, res) => {
     }
 };
 
-// ۶. حذف تراکنش
+//  حذف تراکنش
 exports.deleteTransaction = async (req, res) => {
     try {
         const { id } = req.params;
