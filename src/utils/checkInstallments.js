@@ -1,72 +1,49 @@
 const Transaction = require('../models/Transaction');
 const Notification = require('../models/Notification');
 
-const MS_PER_DAY = 24 * 60 * 60 * 1000;
-
-// تاریخ رو به نیمه‌شب می‌بریم تا فقط «روز» مقایسه بشه، نه ساعت دقیق
 function startOfDay(date) {
   const d = new Date(date);
   d.setHours(0, 0, 0, 0);
   return d;
 }
 
-function daysUntil(dueDate) {
-  const today = startOfDay(new Date());
-  const due = startOfDay(dueDate);
-  return Math.round((due - today) / MS_PER_DAY);
+function endOfDay(date) {
+  const d = new Date(date);
+  d.setHours(23, 59, 59, 999);
+  return d;
 }
-
-const REMINDERS = [
-  { daysLeft: 3, type: '3_DAYS_BEFORE', title: 'یادآوری پرداخت قسط ⚠️' },
-  { daysLeft: 2, type: '2_DAYS_BEFORE', title: 'یادآوری پرداخت قسط ⚠️' },
-  { daysLeft: 1, type: '1_DAY_BEFORE', title: 'یادآوری پرداخت قسط ⚠️' },
-  { daysLeft: 0, type: 'DUE_DATE', title: 'امروز موعد پرداخت قسط شماست ⏰' },
-];
 
 async function checkInstallments() {
   const result = { checked: 0, created: 0 };
 
-  const upperBound = new Date();
-  upperBound.setDate(upperBound.getDate() + 3);
-  upperBound.setHours(23, 59, 59, 999);
+  const todayEnd = endOfDay(new Date());
 
+  // نکته: به‌جای gte/lte دقیقاً روی «امروز»، از lte استفاده می‌کنیم
+  // تا اگر یک روز کرون به هر دلیلی اجرا نشد (سرور داون بود و غیره)،
+  // قسط عقب‌افتاده روز بعد هم پوشش داده بشه و کاربر جا نمونه
   const installments = await Transaction.find({
     type: 'INSTALLMENT',
     isPaid: false,
-    dueDate: { $lte: upperBound },
+    dueDate: { $lte: todayEnd },
   });
 
   for (const installment of installments) {
     result.checked++;
 
-    const diff = daysUntil(installment.dueDate);
-    const reminder = REMINDERS.find((r) => r.daysLeft === diff);
-
-    if (!reminder) continue;
-
     try {
       await Notification.create({
         userId: installment.userId,
-        title: reminder.title,
-        message: `کاربر عزیز، ${
-          reminder.daysLeft === 0
-            ? 'امروز'
-            : `${reminder.daysLeft} روز دیگر`
-        } موعد پرداخت قسط «${installment.title}» به مبلغ ${installment.amount.toLocaleString()} تومان است.`,
+        title: 'امروز موعد پرداخت قسط شماست ⏰',
+        message: `کاربر عزیز، امروز موعد پرداخت قسط «${installment.title}» به مبلغ ${installment.amount.toLocaleString()} تومان است.`,
         relatedTransactionId: installment._id,
-        reminderType: reminder.type,
+        reminderType: 'DUE_DATE',
       });
 
       result.created++;
-      console.log(
-        `✅ اعلان (${reminder.type}) برای کاربر ${installment.userId} ثبت شد.`
-      );
+      console.log(`✅ اعلان سررسید برای کاربر ${installment.userId} ثبت شد.`);
     } catch (error) {
       if (error.code !== 11000) {
-        console.error(
-          `❌ خطا در ساخت اعلان قسط ${installment._id}:`,
-          error.message
-        );
+        console.error(`❌ خطا در ساخت اعلان قسط ${installment._id}:`, error.message);
       }
     }
   }
