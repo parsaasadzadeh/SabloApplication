@@ -44,10 +44,9 @@ async function sendOtp(mobile, code) {
     }
 }
 
-// ✅ تابع جدید برای یادآوری سررسید قسط
-async function sendInstallmentReminder(mobile, installmentTitle, amount) {
+async function sendInstallmentReminder(mobile, installmentTitle) {
     const apiKey = process.env.SMSIR_API_KEY;
-    const templateId = process.env.SMSIR_INSTALLMENT_TEMPLATE_ID; // template جدید
+    const templateId = process.env.SMSIR_INSTALLMENT_TEMPLATE_ID;
 
     if (!apiKey || !templateId) {
         console.warn('⚠️ SMSIR_INSTALLMENT_TEMPLATE_ID در .env تنظیم نشده - SMS ارسال نشد');
@@ -61,8 +60,7 @@ async function sendInstallmentReminder(mobile, installmentTitle, amount) {
                 mobile,
                 templateId: Number(templateId),
                 parameters: [
-                    { name: 'TITLE', value: installmentTitle },
-                    { name: 'AMOUNT', value: amount.toLocaleString('fa-IR') }
+                    { name: 'TITLE', value: installmentTitle }  // ✅ فقط TITLE، بدون AMOUNT
                 ]
             },
             {
