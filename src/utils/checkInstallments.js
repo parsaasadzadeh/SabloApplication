@@ -53,8 +53,7 @@ async function checkInstallments() {
         if (user?.phone) {
             const smsResult = await sendInstallmentReminder(
                 user.phone,
-                installment.title,
-                installment.amount
+                installment.title
             );
 
             if (smsResult.success) {
