@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { requestOtp, verifyOtp, updateProfile, savePushToken } = require('../controllers/authController');
+const { requestOtp, verifyOtp, updateProfile, savePushToken  ,  updateCurrency, getMe } = require('../controllers/authController');
 const { protect } = require('../middlewares/authMiddleware');
 
 router.post('/request-otp', requestOtp);
@@ -12,4 +12,6 @@ router.post('/log', async (req, res) => {
   res.status(200).json({ ok: true });
 });
 router.put('/push-token', protect, savePushToken); 
+router.get('/me', protect, getMe);
+router.patch('/currency', protect, updateCurrency);
 module.exports = router;
