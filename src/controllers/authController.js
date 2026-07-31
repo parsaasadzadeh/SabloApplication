@@ -82,3 +82,34 @@ exports.savePushToken = async (req, res) => {
         res.status(500).json({ message: 'خطای سرور', error: error.message });
     }
 };
+
+
+
+// در آخر فایل اضافه کن
+
+exports.updateCurrency = async (req, res) => {
+    try {
+        const { currency } = req.body;
+        if (!['IRR', 'IRT'].includes(currency)) {
+            return res.status(400).json({ message: 'واحد ارزی نامعتبر است' });
+        }
+        const user = await User.findByIdAndUpdate(
+            req.user.id,
+            { currency },
+            { new: true, select: 'phone name currency' }
+        );
+        res.json({ currency: user.currency });
+    } catch (error) {
+        res.status(500).json({ message: 'خطای سرور' });
+    }
+};
+
+exports.getMe = async (req, res) => {
+    try {
+        const user = await User.findById(req.user.id)
+            .select('phone name currency');
+        res.json({ user });
+    } catch (error) {
+        res.status(500).json({ message: 'خطای سرور' });
+    }
+};
