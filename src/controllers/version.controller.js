@@ -1,9 +1,9 @@
 exports.checkVersion = (req, res) => {
   try {
     res.status(200).json({
-      latestVersion: process.env.APP_LATEST_VERSION || '1.0.0',
-      minVersion: process.env.APP_MIN_VERSION || '1.0.0',
-      forceUpdate: process.env.FORCE_UPDATE_ENABLED === 'true',
+      latestVersion: process.env.APP_LATEST_VERSION || '2.0.3',
+      minVersion: process.env.APP_MIN_VERSION || '2.0.1',
+      forceUpdate: process.env.FORCE_UPDATE_ENABLED === 'false',
       storeUrl: process.env.APP_STORE_URL || 'myket://details?id=com.parsaas.Sablo',
       message: 'نسخه جدید برنامه حسابداری Sablo منتشر شد. برای تجربه بهتر و امنیت بیشتر، برنامه را بروزرسانی کنید.'
     });
