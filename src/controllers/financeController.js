@@ -240,3 +240,94 @@ exports.deleteTransaction = async (req, res) => {
         res.status(500).json({ message: 'خطای سرور', error: error.message });
     }
 };
+
+
+// مقایسه ماه جاری با ماه قبل
+exports.getMonthlyComparison = async (req, res) => {
+    try {
+        const userId = new mongoose.Types.ObjectId(req.user.id);
+        const now = new Date();
+
+        // ماه جاری
+        const currentMonthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+        const currentMonthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
+
+        // ماه قبل
+        const prevMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+        const prevMonthEnd = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59);
+
+        const calcStats = async (start, end) => {
+            const stats = await Transaction.aggregate([
+                {
+                    $match: {
+                        userId,
+                        date: { $gte: start, $lte: end }
+                    }
+                },
+                {
+                    $facet: {
+                        totals: [
+                            {
+                                $group: {
+                                    _id: '$type',
+                                    totalAmount: {
+                                        $sum: {
+                                            $cond: [
+                                                { $eq: ['$type', 'INSTALLMENT'] },
+                                                { $cond: ['$isPaid', '$amount', 0] },
+                                                '$amount'
+                                            ]
+                                        }
+                                    }
+                                }
+                            }
+                        ],
+                        unpaidInstallments: [
+                            { $match: { type: 'INSTALLMENT', isPaid: false } },
+                            { $group: { _id: null, totalRemaining: { $sum: '$amount' } } }
+                        ]
+                    }
+                }
+            ]);
+
+            const rawTotals = stats[0].totals;
+            let income = 0, expense = 0, loans = 0, installmentsPaid = 0;
+            rawTotals.forEach(item => {
+                if (item._id === 'INCOME') income = item.totalAmount;
+                if (item._id === 'EXPENSE') expense = item.totalAmount;
+                if (item._id === 'LOAN') loans = item.totalAmount;
+                if (item._id === 'INSTALLMENT') installmentsPaid = item.totalAmount;
+            });
+
+            return {
+                income,
+                expense,
+                cashBalance: (income + loans) - (expense + installmentsPaid),
+            };
+        };
+
+        const [current, previous] = await Promise.all([
+            calcStats(currentMonthStart, currentMonthEnd),
+            calcStats(prevMonthStart, prevMonthEnd),
+        ]);
+
+        // محاسبه درصد تغییر
+        const calcChange = (curr, prev) => {
+            if (prev === 0) return curr > 0 ? 100 : 0;
+            return Math.round(((curr - prev) / prev) * 100);
+        };
+
+        res.status(200).json({
+            current,
+            previous,
+            changes: {
+                income: calcChange(current.income, previous.income),
+                expense: calcChange(current.expense, previous.expense),
+                cashBalance: calcChange(current.cashBalance, previous.cashBalance),
+            }
+        });
+
+    } catch (error) {
+        res.status(500).json({ message: 'خطای سرور', error: error.message });
+    }
+};
