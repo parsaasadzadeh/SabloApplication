@@ -1,25 +1,31 @@
-// src/controllers/version.controller.js
-const compareVersions = require('../utils/compareVersions');
+const compareVersions = (v1, v2) => {
+  const a = v1.split('.').map(Number);
+  const b = v2.split('.').map(Number);
+  for (let i = 0; i < 3; i++) {
+    if ((a[i] || 0) < (b[i] || 0)) return -1;
+    if ((a[i] || 0) > (b[i] || 0)) return 1;
+  }
+  return 0;
+};
 
 exports.checkVersion = (req, res) => {
   try {
-    const currentVersion = req.query.version; // ورژن نصب‌شده روی گوشی کاربر
     const latestVersion = process.env.APP_LATEST_VERSION || '2.0.3';
-    const storeUrl = process.env.APP_STORE_URL || 'https://myket.ir/app/com.sabloapp.sablo';
+    const minVersion = process.env.APP_MIN_VERSION || '2.0.1';
+    const forceUpdateEnabled = process.env.FORCE_UPDATE_ENABLED === 'true';
 
-    // اگه اپ قدیمیه و اصلاً پارامتر version رو نمی‌فرسته،
-    // برای احتیاط فرض می‌کنیم آپدیت لازمه
-    const forceUpdate = currentVersion
-      ? compareVersions(currentVersion, latestVersion) < 0
-      : true;
+    // نسخه کاربر رو از هدر بخون
+    const userVersion = req.headers['x-app-version'] || latestVersion;
+
+    // forceUpdate فقط اگه نسخه کاربر کمتر از minVersion باشه
+    const forceUpdate = forceUpdateEnabled && compareVersions(userVersion, minVersion) < 0;
 
     res.status(200).json({
       latestVersion,
+      minVersion,
       forceUpdate,
-      storeUrl,
-      message: forceUpdate
-        ? 'نسخه جدید برنامه حسابداری Sablo منتشر شد. برای تجربه بهتر و امنیت بیشتر، لطفاً برنامه را بروزرسانی کنید.'
-        : 'شما از آخرین نسخه برنامه استفاده می‌کنید.'
+      storeUrl: process.env.APP_STORE_URL || 'https://myket.ir/app/com.sabloapp.sablo',
+      message: 'نسخه جدید برنامه حسابداری Sablo منتشر شد. برای تجربه بهتر و امنیت بیشتر، برنامه را بروزرسانی کنید.'
     });
   } catch (error) {
     res.status(500).json({ message: 'خطا در بررسی نسخه اپلیکیشن' });
