@@ -10,8 +10,8 @@ const compareVersions = (v1, v2) => {
 
 exports.checkVersion = (req, res) => {
   try {
-    const latestVersion = process.env.APP_LATEST_VERSION || '2.0.3';
-    const minVersion = process.env.APP_MIN_VERSION || '2.0.1';
+    const latestVersion = process.env.APP_LATEST_VERSION ;
+    const minVersion = process.env.APP_MIN_VERSION;
     const forceUpdateEnabled = process.env.FORCE_UPDATE_ENABLED === 'true';
 
     // نسخه کاربر رو از هدر بخون
