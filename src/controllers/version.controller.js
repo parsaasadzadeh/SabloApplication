@@ -15,7 +15,7 @@ exports.checkVersion = (req, res) => {
     const forceUpdateEnabled = process.env.FORCE_UPDATE_ENABLED === 'true';
 
     // نسخه کاربر رو از هدر بخون
-    const userVersion = req.headers['x-app-version'] || latestVersion;
+    const userVersion = latestVersion;
 
     // forceUpdate فقط اگه نسخه کاربر کمتر از minVersion باشه
     const forceUpdate = forceUpdateEnabled && compareVersions(userVersion, minVersion) < 0;
