@@ -25,7 +25,7 @@ const notificationSchema = new mongoose.Schema({
     },
     reminderType: {
         type: String,
-        enum: ['DUE_DATE'],
+        enum: ['DUE_DATE', 'DAY_BEFORE'],
         default: null,
     },
     createdAt: {
