@@ -43,16 +43,16 @@ async function sendOtp(mobile, code) {
         return { success: false, error: apiError || 'خطا در ارتباط با سرویس پیامک' };
     }
 }
-async function sendInstallmentReminder(mobile, installmentTitle, reminderType = 'DUE_DATE') {
+
+async function sendInstallmentReminder(mobile, installmentTitle) {
     const apiKey = process.env.SMSIR_API_KEY;
-    const templateId = reminderType === 'DAY_BEFORE'
-        ? (process.env.SMSIR_INSTALLMENT_DAYBEFORE_TEMPLATE_ID || process.env.SMSIR_INSTALLMENT_TEMPLATE_ID)
-        : process.env.SMSIR_INSTALLMENT_TEMPLATE_ID;
+    const templateId = process.env.SMSIR_INSTALLMENT_TEMPLATE_ID;
 
     if (!apiKey || !templateId) {
-        console.warn('⚠️ templateId تنظیم نشده - SMS ارسال نشد');
+        console.warn('⚠️ SMSIR_INSTALLMENT_TEMPLATE_ID در .env تنظیم نشده - SMS ارسال نشد');
         return { success: false, error: 'templateId تنظیم نشده' };
     }
+
     try {
         const response = await axios.post(
             SMSIR_BASE_URL,
@@ -60,7 +60,7 @@ async function sendInstallmentReminder(mobile, installmentTitle, reminderType = 
                 mobile,
                 templateId: Number(templateId),
                 parameters: [
-                    { name: 'TITLE', value: installmentTitle }
+                    { name: 'TITLE', value: installmentTitle }  // ✅ فقط TITLE، بدون AMOUNT
                 ]
             },
             {
@@ -72,6 +72,7 @@ async function sendInstallmentReminder(mobile, installmentTitle, reminderType = 
                 timeout: 10000
             }
         );
+
         const data = response.data;
         if (data.status === 1) {
             return { success: true, messageId: data.data.messageId };
