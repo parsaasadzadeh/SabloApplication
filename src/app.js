@@ -6,7 +6,6 @@ const aiRoutes = require('./routes/aiRoutes');
 const notificationRoutes = require('./routes/notificationRoutes'); 
 const versionRoutes = require('./routes/version.routes');
 const cronRoutes = require('./routes/cronRoutes'); 
-const goalRoutes = require('./routes/goalRoutes');
 const connectDB = require('./config/db');
 
 
@@ -23,5 +22,4 @@ app.use('/api/notifications', notificationRoutes);
 app.use('/api/cron', cronRoutes);  
 app.use('/api/ai', aiRoutes);
 app.use('/api/version', versionRoutes);
-app.use('/api/goals', goalRoutes);
 module.exports = app;
