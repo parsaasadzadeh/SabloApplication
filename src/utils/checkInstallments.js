@@ -4,20 +4,16 @@ const Transaction = require('../models/Transaction');
 const Notification = require('../models/Notification');
 const { sendInstallmentReminder } = require('./smsService');
 
-// ✅ محاسبه بازه امروز بر اساس وقت ایران (UTC+3:30)
 function getTodayRangeIran() {
-    const iranOffsetMs = 3.5 * 60 * 60 * 1000; // 3 ساعت و 30 دقیقه
+    const iranOffsetMs = 3.5 * 60 * 60 * 1000; 
     const nowUtc = Date.now();
     const nowIran = new Date(nowUtc + iranOffsetMs);
 
-    // ابتدا و انتهای امروز به وقت ایران — ولی به صورت UTC ذخیره میشه
     const startIran = new Date(nowIran);
     startIran.setUTCHours(0, 0, 0, 0);
 
     const endIran = new Date(nowIran);
     endIran.setUTCHours(23, 59, 59, 999);
-
-    // تبدیل به UTC واقعی برای query
     return {
         start: new Date(startIran.getTime() - iranOffsetMs),
         end: new Date(endIran.getTime() - iranOffsetMs),
@@ -29,7 +25,6 @@ async function checkInstallments() {
 
     const { start, end } = getTodayRangeIran();
     
-    // ✅ لاگ بذار ببینی چی میفرسته به DB
     console.log('📅 بازه جستجو:', start.toISOString(), '←→', end.toISOString());
 
     const installments = await Transaction.find({
@@ -49,7 +44,6 @@ async function checkInstallments() {
             continue;
         }
 
-        // ساخت Notification
         try {
             await Notification.create({
                 userId: user._id,
