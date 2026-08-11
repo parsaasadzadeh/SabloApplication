@@ -1,44 +1,55 @@
 // src/utils/checkInstallments.js
+
 const Transaction = require('../models/Transaction');
 const Notification = require('../models/Notification');
 const { sendInstallmentReminder } = require('./smsService');
 
-function startOfDay(date) {
-    const d = new Date(date);
-    d.setHours(0, 0, 0, 0);
-    return d;
-}
+// ✅ محاسبه بازه امروز بر اساس وقت ایران (UTC+3:30)
+function getTodayRangeIran() {
+    const iranOffsetMs = 3.5 * 60 * 60 * 1000; // 3 ساعت و 30 دقیقه
+    const nowUtc = Date.now();
+    const nowIran = new Date(nowUtc + iranOffsetMs);
 
-function endOfDay(date) {
-    const d = new Date(date);
-    d.setHours(23, 59, 59, 999);
-    return d;
+    // ابتدا و انتهای امروز به وقت ایران — ولی به صورت UTC ذخیره میشه
+    const startIran = new Date(nowIran);
+    startIran.setUTCHours(0, 0, 0, 0);
+
+    const endIran = new Date(nowIran);
+    endIran.setUTCHours(23, 59, 59, 999);
+
+    // تبدیل به UTC واقعی برای query
+    return {
+        start: new Date(startIran.getTime() - iranOffsetMs),
+        end: new Date(endIran.getTime() - iranOffsetMs),
+    };
 }
 
 async function checkInstallments() {
     const result = { checked: 0, notifCreated: 0, smsSent: 0, smsFailed: 0 };
 
-    const today = new Date();
-    const todayStart = startOfDay(today);
-    const todayEnd = endOfDay(today);
+    const { start, end } = getTodayRangeIran();
+    
+    // ✅ لاگ بذار ببینی چی میفرسته به DB
+    console.log('📅 بازه جستجو:', start.toISOString(), '←→', end.toISOString());
 
-    // ✅ فقط اقساطی که سررسیدشون دقیقاً امروزه — نه گذشته، نه آینده
     const installments = await Transaction.find({
         type: 'INSTALLMENT',
         isPaid: false,
-        dueDate: { $gte: todayStart, $lte: todayEnd },
+        dueDate: { $gte: start, $lte: end },
     }).populate('userId', 'phone name');
+
+    console.log(`🔍 تعداد اقساط پیدا شده: ${installments.length}`);
 
     for (const installment of installments) {
         result.checked++;
         const user = installment.userId;
 
         if (!user) {
-            console.warn(`⚠️ قسط ${installment._id} userId ندارد، رد شد.`);
+            console.warn(`⚠️ قسط ${installment._id} userId ندارد`);
             continue;
         }
 
-        // --- ۱. ساخت Notification ---
+        // ساخت Notification
         try {
             await Notification.create({
                 userId: user._id,
@@ -48,30 +59,24 @@ async function checkInstallments() {
                 reminderType: 'DUE_DATE',
             });
             result.notifCreated++;
-            console.log(`✅ اعلان سررسید برای کاربر ${user._id} ثبت شد.`);
+            console.log(`✅ اعلان برای کاربر ${user._id} ثبت شد.`);
         } catch (error) {
             if (error.code !== 11000) {
-                console.error(`❌ خطا در ساخت اعلان قسط ${installment._id}:`, error.message);
+                console.error(`❌ خطا در ساخت اعلان:`, error.message);
             } else {
-                console.log(`ℹ️ اعلان برای قسط ${installment._id} قبلاً ثبت شده، رد شد.`);
+                console.log(`ℹ️ اعلان قبلاً ثبت شده، رد شد.`);
             }
         }
 
-        // --- ۲. ارسال SMS ---
+        // ارسال SMS
         if (user?.phone) {
-            const smsResult = await sendInstallmentReminder(
-                user.phone,
-                installment.title
-            );
+            const smsResult = await sendInstallmentReminder(user.phone, installment.title);
             if (smsResult.success) {
                 result.smsSent++;
-                console.log(`📱 SMS سررسید برای ${user.phone} ارسال شد.`);
             } else {
                 result.smsFailed++;
-                console.warn(`⚠️ SMS برای ${user.phone} ارسال نشد: ${smsResult.error}`);
+                console.warn(`⚠️ SMS ناموفق برای ${user.phone}: ${smsResult.error}`);
             }
-        } else {
-            console.warn(`⚠️ کاربر ${user._id} شماره تلفن ندارد، SMS ارسال نشد.`);
         }
     }
 
