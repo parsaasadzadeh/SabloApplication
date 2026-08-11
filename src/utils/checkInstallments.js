@@ -2,48 +2,36 @@
 
 const Transaction = require('../models/Transaction');
 const Notification = require('../models/Notification');
-const { sendInstallmentReminder } = require('./smsService');
+const User = require('../models/User'); // ✅ اضافه شد
+const { sendInstallmentReminder } = require('./smsService'); // ✅ اضافه شد
 
-function getTodayRangeIran() {
-    const iranOffsetMs = 3.5 * 60 * 60 * 1000; 
-    const nowUtc = Date.now();
-    const nowIran = new Date(nowUtc + iranOffsetMs);
+function startOfDay(date) {
+    const d = new Date(date);
+    d.setHours(0, 0, 0, 0);
+    return d;
+}
 
-    const startIran = new Date(nowIran);
-    startIran.setUTCHours(0, 0, 0, 0);
-
-    const endIran = new Date(nowIran);
-    endIran.setUTCHours(23, 59, 59, 999);
-    return {
-        start: new Date(startIran.getTime() - iranOffsetMs),
-        end: new Date(endIran.getTime() - iranOffsetMs),
-    };
+function endOfDay(date) {
+    const d = new Date(date);
+    d.setHours(23, 59, 59, 999);
+    return d;
 }
 
 async function checkInstallments() {
     const result = { checked: 0, notifCreated: 0, smsSent: 0, smsFailed: 0 };
-
-    const { start, end } = getTodayRangeIran();
-    
-    console.log('📅 بازه جستجو:', start.toISOString(), '←→', end.toISOString());
+    const todayEnd = endOfDay(new Date());
 
     const installments = await Transaction.find({
         type: 'INSTALLMENT',
         isPaid: false,
-        dueDate: { $gte: start, $lte: end },
-    }).populate('userId', 'phone name');
-
-    console.log(`🔍 تعداد اقساط پیدا شده: ${installments.length}`);
+        dueDate: { $lte: todayEnd },
+    }).populate('userId', 'phone name'); // ✅ populate برای گرفتن شماره کاربر
 
     for (const installment of installments) {
         result.checked++;
-        const user = installment.userId;
+        const user = installment.userId; // بعد از populate، آبجکت user هست
 
-        if (!user) {
-            console.warn(`⚠️ قسط ${installment._id} userId ندارد`);
-            continue;
-        }
-
+        // --- ۱. ساخت Notification (همون منطق قبلی) ---
         try {
             await Notification.create({
                 userId: user._id,
@@ -53,24 +41,30 @@ async function checkInstallments() {
                 reminderType: 'DUE_DATE',
             });
             result.notifCreated++;
-            console.log(`✅ اعلان برای کاربر ${user._id} ثبت شد.`);
+            console.log(`✅ اعلان سررسید برای کاربر ${user._id} ثبت شد.`);
         } catch (error) {
             if (error.code !== 11000) {
-                console.error(`❌ خطا در ساخت اعلان:`, error.message);
-            } else {
-                console.log(`ℹ️ اعلان قبلاً ثبت شده، رد شد.`);
+                // 11000 = duplicate key: یعنی notification امروز قبلاً ساخته شده، نرمال است
+                console.error(`❌ خطا در ساخت اعلان قسط ${installment._id}:`, error.message);
             }
         }
 
-        // ارسال SMS
+        // --- ۲. ارسال SMS ---
         if (user?.phone) {
-            const smsResult = await sendInstallmentReminder(user.phone, installment.title);
+            const smsResult = await sendInstallmentReminder(
+                user.phone,
+                installment.title
+            );
+
             if (smsResult.success) {
                 result.smsSent++;
+                console.log(`📱 SMS سررسید برای ${user.phone} ارسال شد.`);
             } else {
                 result.smsFailed++;
-                console.warn(`⚠️ SMS ناموفق برای ${user.phone}: ${smsResult.error}`);
+                console.warn(`⚠️ SMS برای ${user.phone} ارسال نشد: ${smsResult.error}`);
             }
+        } else {
+            console.warn(`⚠️ کاربر ${user._id} شماره تلفن ندارد، SMS ارسال نشد.`);
         }
     }
 
@@ -78,3 +72,4 @@ async function checkInstallments() {
 }
 
 module.exports = { checkInstallments };
+
