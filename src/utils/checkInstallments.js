@@ -1,39 +1,48 @@
 // src/utils/checkInstallments.js
-
 const Transaction = require('../models/Transaction');
 const Notification = require('../models/Notification');
 const { sendInstallmentReminder } = require('./smsService');
 
-async function checkInstallments() {
-    const result = { checked: 0, notifCreated: 0, smsSent: 0, smsFailed: 0 };
+// چند روز قبل از سررسید، یادآوری اول ارسال بشه.
+// طبق نمونه‌ای که دادی («فردا سررسید قسط شماست») این عدد ۱ روزه.
+// اگه واقعاً منظورت ۲ روز تقویمی کامل قبل از سررسیده، همینجا به 2 تغییرش بده.
+const DAYS_BEFORE_DUE = 1;
 
-    // ✅ بازه امروز بر اساس UTC (چون MongoDB همه چیز رو UTC ذخیره میکنه)
+// بازه UTC یک روز مشخص (امروز + offsetDays)
+function getDayRangeUTC(offsetDays = 0) {
     const now = new Date();
-    const todayStart = new Date(Date.UTC(
+    const start = new Date(Date.UTC(
         now.getUTCFullYear(),
         now.getUTCMonth(),
-        now.getUTCDate(),
+        now.getUTCDate() + offsetDays,
         0, 0, 0, 0
     ));
-    const todayEnd = new Date(Date.UTC(
+    const end = new Date(Date.UTC(
         now.getUTCFullYear(),
         now.getUTCMonth(),
-        now.getUTCDate(),
+        now.getUTCDate() + offsetDays,
         23, 59, 59, 999
     ));
+    return { start, end };
+}
 
-    console.log('📅 بازه جستجو (UTC):', todayStart.toISOString(), '←→', todayEnd.toISOString());
+// پردازش یک نوع یادآوری (مثلا «فردا» یا «امروز») برای همه اقساط داخل بازه
+async function processReminderBatch({ offsetDays, reminderType, buildTexts }) {
+    const batchResult = { checked: 0, notifCreated: 0, smsSent: 0, smsFailed: 0 };
+    const { start, end } = getDayRangeUTC(offsetDays);
+
+    console.log(`📅 بازه جستجو [${reminderType}] (UTC):`, start.toISOString(), '←→', end.toISOString());
 
     const installments = await Transaction.find({
         type: 'INSTALLMENT',
         isPaid: false,
-        dueDate: { $gte: todayStart, $lte: todayEnd }, // ✅ فقط امروز
+        dueDate: { $gte: start, $lte: end },
     }).populate('userId', 'phone name');
 
-    console.log(`🔍 تعداد اقساط امروز: ${installments.length}`);
+    console.log(`🔍 تعداد اقساط [${reminderType}]: ${installments.length}`);
 
     for (const installment of installments) {
-        result.checked++;
+        batchResult.checked++;
         const user = installment.userId;
 
         // اگه populate درست کار نکرده باشه skip کن
@@ -42,17 +51,19 @@ async function checkInstallments() {
             continue;
         }
 
+        const { notifTitle, notifMessage, smsMessage } = buildTexts(installment);
+
         // --- ۱. نوتیف داخل اپ ---
         try {
             await Notification.create({
                 userId: user._id,
-                title: 'امروز موعد پرداخت قسط شماست ⏰',
-                message: `کاربر عزیز، امروز موعد پرداخت قسط «${installment.title}» به مبلغ ${installment.amount.toLocaleString()} تومان است.`,
+                title: notifTitle,
+                message: notifMessage,
                 relatedTransactionId: installment._id,
-                reminderType: 'DUE_DATE',
+                reminderType,
             });
-            result.notifCreated++;
-            console.log(`✅ نوتیف برای کاربر ${user._id} ثبت شد.`);
+            batchResult.notifCreated++;
+            console.log(`✅ نوتیف [${reminderType}] برای کاربر ${user._id} ثبت شد.`);
         } catch (error) {
             // کد 11000 یعنی duplicate — نوتیف قبلاً ساخته شده، نرماله
             if (error.code !== 11000) {
@@ -62,18 +73,57 @@ async function checkInstallments() {
 
         // --- ۲. ارسال SMS ---
         if (user.phone) {
-            const smsResult = await sendInstallmentReminder(user.phone, installment.title);
+            const smsResult = await sendInstallmentReminder(user.phone, smsMessage);
             if (smsResult.success) {
-                result.smsSent++;
-                console.log(`📱 SMS رفت به ${user.phone}`);
+                batchResult.smsSent++;
+                console.log(`📱 SMS [${reminderType}] رفت به ${user.phone}`);
             } else {
-                result.smsFailed++;
-                console.warn(`⚠️ SMS نرفت به ${user.phone}: ${smsResult.error}`);
+                batchResult.smsFailed++;
+                console.warn(`⚠️ SMS [${reminderType}] نرفت به ${user.phone}: ${smsResult.error}`);
             }
         } else {
             console.warn(`⚠️ کاربر ${user._id} شماره نداره، SMS ارسال نشد.`);
         }
     }
+
+    return batchResult;
+}
+
+function mergeResults(...results) {
+    return results.reduce((acc, r) => ({
+        checked: acc.checked + r.checked,
+        notifCreated: acc.notifCreated + r.notifCreated,
+        smsSent: acc.smsSent + r.smsSent,
+        smsFailed: acc.smsFailed + r.smsFailed,
+    }), { checked: 0, notifCreated: 0, smsSent: 0, smsFailed: 0 });
+}
+
+async function checkInstallments() {
+    // --- یادآوری یک روز قبل از سررسید: «فردا سررسید قسط شماست» ---
+    const upcomingResult = await processReminderBatch({
+        offsetDays: DAYS_BEFORE_DUE,
+        reminderType: 'UPCOMING_DUE_DATE',
+        buildTexts: (installment) => ({
+            notifTitle: 'یادآوری سررسید قسط ⏳',
+            notifMessage: `کاربر عزیز، فردا موعد پرداخت قسط «${installment.title}» به مبلغ ${installment.amount.toLocaleString()} تومان است.`,
+            smsMessage: `کاربر گرامی، فردا سررسید قسط «${installment.title}» به مبلغ ${installment.amount.toLocaleString()} تومان است.`,
+        }),
+    });
+
+    // --- یادآوری روز سررسید: «امروز سررسید قسط شماست» ---
+    const dueTodayResult = await processReminderBatch({
+        offsetDays: 0,
+        reminderType: 'DUE_DATE',
+        buildTexts: (installment) => ({
+            notifTitle: 'امروز موعد پرداخت قسط شماست ⏰',
+            notifMessage: `کاربر عزیز، امروز موعد پرداخت قسط «${installment.title}» به مبلغ ${installment.amount.toLocaleString()} تومان است.`,
+            smsMessage: `کاربر گرامی، امروز سررسید قسط «${installment.title}» به مبلغ ${installment.amount.toLocaleString()} تومان است.`,
+        }),
+    });
+
+    const result = mergeResults(upcomingResult, dueTodayResult);
+    result.upcoming = upcomingResult;
+    result.dueToday = dueTodayResult;
 
     return result;
 }
