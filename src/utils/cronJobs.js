@@ -12,6 +12,12 @@ const startCronJobs = () => {
                 `${result.smsSent} SMS ارسال شد | ` +
                 `${result.smsFailed} SMS ناموفق`
             );
+            console.log(
+                `   └─ یادآوری فردا: ${result.upcoming.checked} قسط، ${result.upcoming.smsSent} SMS ارسال شد`
+            );
+            console.log(
+                `   └─ یادآوری امروز: ${result.dueToday.checked} قسط، ${result.dueToday.smsSent} SMS ارسال شد`
+            );
         } catch (err) {
             console.error('❌ خطای کلی در اجرای cron سررسید:', err.message);
         }
