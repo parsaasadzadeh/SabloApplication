@@ -27,8 +27,7 @@ exports.addTransaction = async (req, res) => {
         res.status(500).json({ message: 'خطای سرور', error: error.message });
     }
 };
-
-//دریافت لیستexports.getMyTransactions = async (req, res) => {
+exports.getMyTransactions = async (req, res) => {
     try {
         const page = parseInt(req.query.page) || 1;
         const limit = parseInt(req.query.limit) || 10;
