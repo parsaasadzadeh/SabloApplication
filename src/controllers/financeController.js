@@ -28,25 +28,35 @@ exports.addTransaction = async (req, res) => {
     }
 };
 
-//دریافت لیست 
-exports.getMyTransactions = async (req, res) => {
+//دریافت لیستexports.getMyTransactions = async (req, res) => {
     try {
         const page = parseInt(req.query.page) || 1;
         const limit = parseInt(req.query.limit) || 10;
         const skip = (page - 1) * limit;
+        const search = req.query.search?.trim();
 
-        const transactions = await Transaction.find({ userId: req.user.id })
-            .sort({ date: -1 })
-            .skip(skip)
-            .limit(limit);
+        const filter = { userId: req.user.id };
 
-        const totalTransactions = await Transaction.countDocuments({ userId: req.user.id });
+        if (search) {
+            filter.$or = [
+                { title: { $regex: search, $options: 'i' } },
+                { description: { $regex: search, $options: 'i' } },
+            ];
+        }
 
-        res.status(200).json({ 
+        const [transactions, totalTransactions] = await Promise.all([
+            Transaction.find(filter)
+                .sort({ date: -1 })
+                .skip(skip)
+                .limit(limit),
+            Transaction.countDocuments(filter),
+        ]);
+
+        res.status(200).json({
             currentPage: page,
             totalPages: Math.ceil(totalTransactions / limit),
             totalItems: totalTransactions,
-            transactions 
+            transactions,
         });
     } catch (error) {
         res.status(500).json({ message: 'خطای سرور', error: error.message });
