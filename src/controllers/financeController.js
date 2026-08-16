@@ -33,9 +33,26 @@ exports.getMyTransactions = async (req, res) => {
         const limit = parseInt(req.query.limit) || 10;
         const skip = (page - 1) * limit;
         const search = req.query.search?.trim();
+        const period = req.query.period; // 'current' | 'previous' | 'all'
 
         const filter = { userId: req.user.id };
 
+        // فیلتر تاریخ
+        if (period === 'current') {
+            const now = new Date();
+            filter.date = {
+                $gte: new Date(now.getFullYear(), now.getMonth(), 1),
+                $lte: new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59),
+            };
+        } else if (period === 'previous') {
+            const now = new Date();
+            filter.date = {
+                $gte: new Date(now.getFullYear(), now.getMonth() - 1, 1),
+                $lte: new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59),
+            };
+        }
+
+        // فیلتر سرچ
         if (search) {
             filter.$or = [
                 { title: { $regex: search, $options: 'i' } },
