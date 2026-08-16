@@ -34,23 +34,22 @@ exports.getMyTransactions = async (req, res) => {
         const skip = (page - 1) * limit;
         const search = req.query.search?.trim();
         const period = req.query.period; // 'current' | 'previous' | 'all'
+const fromDate = req.query.from; // مثال: 2026-01-01
+        const toDate = req.query.to;     // مثال: 2026-08-31
 
         const filter = { userId: req.user.id };
 
-        // فیلتر تاریخ
-        if (period === 'current') {
-            const now = new Date();
-            filter.date = {
-                $gte: new Date(now.getFullYear(), now.getMonth(), 1),
-                $lte: new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59),
-            };
-        } else if (period === 'previous') {
-            const now = new Date();
-            filter.date = {
-                $gte: new Date(now.getFullYear(), now.getMonth() - 1, 1),
-                $lte: new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59),
-            };
+        // فیلتر بازه تاریخ
+        if (fromDate || toDate) {
+            filter.date = {};
+            if (fromDate) filter.date.$gte = new Date(fromDate);
+            if (toDate) {
+                const to = new Date(toDate);
+                to.setHours(23, 59, 59, 999);
+                filter.date.$lte = to;
+            }
         }
+
 
         // فیلتر سرچ
         if (search) {
