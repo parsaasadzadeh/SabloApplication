@@ -357,3 +357,83 @@ exports.getMonthlyComparison = async (req, res) => {
         res.status(500).json({ message: 'خطای سرور', error: error.message });
     }
 };
+
+
+
+exports.exportTransactionsCSV = async (req, res) => {
+    try {
+        const search = req.query.search?.trim();
+        const fromDate = req.query.from;
+        const toDate = req.query.to;
+
+        const filter = { userId: req.user.id };
+
+        if (fromDate || toDate) {
+            filter.date = {};
+            if (fromDate) filter.date.$gte = new Date(fromDate);
+            if (toDate) {
+                const to = new Date(toDate);
+                to.setHours(23, 59, 59, 999);
+                filter.date.$lte = to;
+            }
+        }
+
+        if (search) {
+            filter.$or = [
+                { title: { $regex: search, $options: 'i' } },
+                { description: { $regex: search, $options: 'i' } },
+            ];
+        }
+
+        const transactions = await Transaction.find(filter).sort({ date: -1 });
+
+        // تبدیل نوع تراکنش به فارسی
+        const typeLabel = (type) => {
+            const map = {
+                INCOME: 'درآمد',
+                EXPENSE: 'خرج',
+                INSTALLMENT: 'قسط',
+                LOAN: 'وام',
+            };
+            return map[type] || type;
+        };
+
+        // ساخت CSV
+        const rows = [
+            // هدر
+            ['ردیف', 'عنوان', 'نوع', 'مبلغ (ریال)', 'توضیحات', 'تاریخ', 'وضعیت پرداخت'].join(','),
+            // داده‌ها
+            ...transactions.map((tx, i) => {
+                const date = new Date(tx.date).toLocaleDateString('fa-IR');
+                const isPaid = tx.type === 'INSTALLMENT'
+                    ? (tx.isPaid ? 'پرداخت شده' : 'پرداخت نشده')
+                    : '-';
+                // escape کردن فیلدهایی که ممکنه کاما داشته باشن
+                const escape = (val) => `"${String(val ?? '').replace(/"/g, '""')}"`;
+                return [
+                    i + 1,
+                    escape(tx.title),
+                    escape(typeLabel(tx.type)),
+                    tx.amount,
+                    escape(tx.description || ''),
+                    escape(date),
+                    escape(isPaid),
+                ].join(',');
+            }),
+        ].join('\n');
+
+        // BOM برای نمایش درست فارسی در Excel
+        const BOM = '\uFEFF';
+        const csv = BOM + rows;
+
+        res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+        res.setHeader(
+            'Content-Disposition',
+            `attachment; filename="sablo-transactions-${Date.now()}.csv"`
+        );
+        res.status(200).send(csv);
+
+    } catch (error) {
+        res.status(500).json({ message: 'خطای سرور', error: error.message });
+    }
+};
