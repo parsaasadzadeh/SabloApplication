@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { addTransaction, getMyTransactions, getFinanceStats, payInstallment,deleteTransaction, updateTransaction, getMonthlyComparison } = require('../controllers/financeController');
+const { addTransaction, getMyTransactions,exportTransactionsCSV, getFinanceStats, payInstallment,deleteTransaction, updateTransaction, getMonthlyComparison } = require('../controllers/financeController');
 const { protect } = require('../middlewares/authMiddleware');
 
 router.use(protect); 
@@ -12,6 +12,7 @@ router.put('/pay-installment/:id', payInstallment);
 router.put('/update/:id', updateTransaction);  
 router.delete('/delete/:id', deleteTransaction);  
 router.get('/monthly-comparison', getMonthlyComparison);
+router.get('/export-csv', exportTransactionsCSV);
   
 module.exports = router;
 
