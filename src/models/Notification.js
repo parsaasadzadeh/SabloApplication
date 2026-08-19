@@ -27,7 +27,7 @@ const notificationSchema = new mongoose.Schema({
     type: String,
     enum: ['DUE_DATE', 'UPCOMING_DUE_DATE'], 
     default: null,
-},,
+},
     createdAt: {
         type: Date,
         default: Date.now
