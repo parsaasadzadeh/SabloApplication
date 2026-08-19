@@ -24,10 +24,10 @@ const notificationSchema = new mongoose.Schema({
         default: null
     },
     reminderType: {
-        type: String,
-        enum: ['DUE_DATE'],
-        default: null,
-    },
+    type: String,
+    enum: ['DUE_DATE', 'UPCOMING_DUE_DATE'], 
+    default: null,
+},,
     createdAt: {
         type: Date,
         default: Date.now
