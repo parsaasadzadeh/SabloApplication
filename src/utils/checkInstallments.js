@@ -1,14 +1,9 @@
-// src/utils/checkInstallments.js
 const Transaction = require('../models/Transaction');
 const Notification = require('../models/Notification');
 const { sendInstallmentReminder } = require('./smsService');
 
-// چند روز قبل از سررسید، یادآوری اول ارسال بشه.
-// طبق نمونه‌ای که دادی («فردا سررسید قسط شماست») این عدد ۱ روزه.
-// اگه واقعاً منظورت ۲ روز تقویمی کامل قبل از سررسیده، همینجا به 2 تغییرش بده.
 const DAYS_BEFORE_DUE = 1;
 
-// بازه UTC یک روز مشخص (امروز + offsetDays)
 function getDayRangeUTC(offsetDays = 0) {
     const now = new Date();
     const start = new Date(Date.UTC(
@@ -26,7 +21,6 @@ function getDayRangeUTC(offsetDays = 0) {
     return { start, end };
 }
 
-// پردازش یک نوع یادآوری (مثلا «فردا» یا «امروز») برای همه اقساط داخل بازه
 async function processReminderBatch({ offsetDays, reminderType, buildTexts }) {
     const batchResult = { checked: 0, notifCreated: 0, smsSent: 0, smsFailed: 0 };
     const { start, end } = getDayRangeUTC(offsetDays);
@@ -45,13 +39,12 @@ async function processReminderBatch({ offsetDays, reminderType, buildTexts }) {
         batchResult.checked++;
         const user = installment.userId;
 
-        // اگه populate درست کار نکرده باشه skip کن
         if (!user || !user._id) {
             console.warn(`⚠️ قسط ${installment._id} کاربر معتبر نداره، رد شد.`);
             continue;
         }
 
-        const { notifTitle, notifMessage, smsMessage } = buildTexts(installment);
+        const { notifTitle, notifMessage } = buildTexts(installment);
 
         // --- ۱. نوتیف داخل اپ ---
         try {
@@ -65,15 +58,16 @@ async function processReminderBatch({ offsetDays, reminderType, buildTexts }) {
             batchResult.notifCreated++;
             console.log(`✅ نوتیف [${reminderType}] برای کاربر ${user._id} ثبت شد.`);
         } catch (error) {
-            // کد 11000 یعنی duplicate — نوتیف قبلاً ساخته شده، نرماله
             if (error.code !== 11000) {
                 console.error(`❌ خطا در ساخت نوتیف قسط ${installment._id}:`, error.message);
+            } else {
+                console.log(`ℹ️ نوتیف [${reminderType}] قبلاً ثبت شده بود، skip شد.`);
             }
         }
 
-        // --- ۲. ارسال SMS ---
+        // --- ۲. ارسال SMS — فقط title قسط ---
         if (user.phone) {
-            const smsResult = await sendInstallmentReminder(user.phone, smsMessage);
+            const smsResult = await sendInstallmentReminder(user.phone, installment.title);
             if (smsResult.success) {
                 batchResult.smsSent++;
                 console.log(`📱 SMS [${reminderType}] رفت به ${user.phone}`);
@@ -99,25 +93,23 @@ function mergeResults(...results) {
 }
 
 async function checkInstallments() {
-    // --- یادآوری یک روز قبل از سررسید: «فردا سررسید قسط شماست» ---
+    // یادآوری یک روز قبل از سررسید
     const upcomingResult = await processReminderBatch({
         offsetDays: DAYS_BEFORE_DUE,
         reminderType: 'UPCOMING_DUE_DATE',
         buildTexts: (installment) => ({
             notifTitle: 'یادآوری سررسید قسط ⏳',
             notifMessage: `کاربر عزیز، فردا موعد پرداخت قسط «${installment.title}» به مبلغ ${installment.amount.toLocaleString()} تومان است.`,
-            smsMessage: `کاربر گرامی، فردا سررسید قسط «${installment.title}» به مبلغ ${installment.amount.toLocaleString()} تومان است.`,
         }),
     });
 
-    // --- یادآوری روز سررسید: «امروز سررسید قسط شماست» ---
+    // یادآوری روز سررسید
     const dueTodayResult = await processReminderBatch({
         offsetDays: 0,
         reminderType: 'DUE_DATE',
         buildTexts: (installment) => ({
             notifTitle: 'امروز موعد پرداخت قسط شماست ⏰',
             notifMessage: `کاربر عزیز، امروز موعد پرداخت قسط «${installment.title}» به مبلغ ${installment.amount.toLocaleString()} تومان است.`,
-            smsMessage: `کاربر گرامی، امروز سررسید قسط «${installment.title}» به مبلغ ${installment.amount.toLocaleString()} تومان است.`,
         }),
     });
 
