@@ -1,6 +1,6 @@
 const Transaction = require('../models/Transaction');
 const Notification = require('../models/Notification');
-const { sendInstallmentReminder, sendUpcomingReminder } = require('./smsService');
+const { sendInstallmentReminder } = require('./smsService');
 
 const DAYS_BEFORE_DUE = 1;
 
@@ -21,7 +21,7 @@ function getDayRangeUTC(offsetDays = 0) {
     return { start, end };
 }
 
-async function processReminderBatch({ offsetDays, reminderType, buildTexts, smsSender }) {
+async function processReminderBatch({ offsetDays, reminderType, buildTexts }) {
     const batchResult = { checked: 0, notifCreated: 0, smsSent: 0, smsFailed: 0 };
     const { start, end } = getDayRangeUTC(offsetDays);
 
@@ -65,9 +65,9 @@ async function processReminderBatch({ offsetDays, reminderType, buildTexts, smsS
             }
         }
 
-        // --- ۲. ارسال SMS با تابع مناسب ---
+        // --- ۲. ارسال SMS — فقط title قسط ---
         if (user.phone) {
-            const smsResult = await smsSender(user.phone, installment.title);
+            const smsResult = await sendInstallmentReminder(user.phone, installment.title);
             if (smsResult.success) {
                 batchResult.smsSent++;
                 console.log(`📱 SMS [${reminderType}] رفت به ${user.phone}`);
@@ -93,22 +93,20 @@ function mergeResults(...results) {
 }
 
 async function checkInstallments() {
-    // ✅ یادآوری یک روز قبل — template «فردا»
+    // یادآوری یک روز قبل از سررسید
     const upcomingResult = await processReminderBatch({
         offsetDays: DAYS_BEFORE_DUE,
         reminderType: 'UPCOMING_DUE_DATE',
-        smsSender: sendUpcomingReminder, // ✅ template فردا
         buildTexts: (installment) => ({
             notifTitle: 'یادآوری سررسید قسط ⏳',
             notifMessage: `کاربر عزیز، فردا موعد پرداخت قسط «${installment.title}» به مبلغ ${installment.amount.toLocaleString()} تومان است.`,
         }),
     });
 
-    // ✅ یادآوری روز سررسید — template «امروز»
+    // یادآوری روز سررسید
     const dueTodayResult = await processReminderBatch({
         offsetDays: 0,
         reminderType: 'DUE_DATE',
-        smsSender: sendInstallmentReminder, // ✅ template امروز
         buildTexts: (installment) => ({
             notifTitle: 'امروز موعد پرداخت قسط شماست ⏰',
             notifMessage: `کاربر عزیز، امروز موعد پرداخت قسط «${installment.title}» به مبلغ ${installment.amount.toLocaleString()} تومان است.`,
