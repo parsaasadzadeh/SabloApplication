@@ -65,9 +65,9 @@ async function processReminderBatch({ offsetDays, reminderType, buildTexts }) {
             }
         }
 
-        // --- ۲. ارسال SMS — فقط title قسط ---
+        // --- ۲. ارسال SMS ---
         if (user.phone) {
-            const smsResult = await sendInstallmentReminder(user.phone, installment.title);
+            const smsResult = await sendInstallmentReminder(user.phone, installment.title, reminderType);
             if (smsResult.success) {
                 batchResult.smsSent++;
                 console.log(`📱 SMS [${reminderType}] رفت به ${user.phone}`);
