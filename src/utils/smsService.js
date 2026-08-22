@@ -1,19 +1,24 @@
 const axios = require('axios');
+
 const SMSIR_BASE_URL = 'https://api.sms.ir/v1/send/verify';
 
 async function sendOtp(mobile, code) {
     const apiKey = process.env.SMSIR_API_KEY;
-    const templateId = process.env.SMSIR_TEMPLATE_ID;
+    const templateId = process.env.SMSIR_TEMPLATE_ID; 
+
     if (!apiKey || !templateId) {
         throw new Error('متغیرهای SMSIR_API_KEY یا SMSIR_TEMPLATE_ID در .env تنظیم نشده‌اند');
     }
+
     try {
         const response = await axios.post(
             SMSIR_BASE_URL,
             {
                 mobile,
                 templateId: Number(templateId),
-                parameters: [{ name: 'CODE', value: code }]
+                parameters: [
+                    { name: 'CODE', value: code } 
+                ]
             },
             {
                 headers: {
@@ -24,10 +29,13 @@ async function sendOtp(mobile, code) {
                 timeout: 10000
             }
         );
+
         const data = response.data;
+
         if (data.status === 1) {
             return { success: true, messageId: data.data.messageId, cost: data.data.cost };
         }
+
         return { success: false, error: data.message || 'ارسال پیامک ناموفق بود' };
     } catch (err) {
         const apiError = err.response?.data?.message;
@@ -36,21 +44,24 @@ async function sendOtp(mobile, code) {
     }
 }
 
-// ✅ یادآوری روز سررسید — «امروز سررسید قسط شماست»
 async function sendInstallmentReminder(mobile, installmentTitle) {
     const apiKey = process.env.SMSIR_API_KEY;
     const templateId = process.env.SMSIR_INSTALLMENT_TEMPLATE_ID;
+
     if (!apiKey || !templateId) {
-        console.warn('⚠️ SMSIR_INSTALLMENT_TEMPLATE_ID در .env تنظیم نشده');
+        console.warn('⚠️ SMSIR_INSTALLMENT_TEMPLATE_ID در .env تنظیم نشده - SMS ارسال نشد');
         return { success: false, error: 'templateId تنظیم نشده' };
     }
+
     try {
         const response = await axios.post(
             SMSIR_BASE_URL,
             {
                 mobile,
                 templateId: Number(templateId),
-                parameters: [{ name: 'TITLE', value: installmentTitle }]
+                parameters: [
+                    { name: 'TITLE', value: installmentTitle }  // ✅ فقط TITLE، بدون AMOUNT
+                ]
             },
             {
                 headers: {
@@ -61,6 +72,7 @@ async function sendInstallmentReminder(mobile, installmentTitle) {
                 timeout: 10000
             }
         );
+
         const data = response.data;
         if (data.status === 1) {
             return { success: true, messageId: data.data.messageId };
@@ -73,43 +85,4 @@ async function sendInstallmentReminder(mobile, installmentTitle) {
     }
 }
 
-// ✅ یادآوری یک روز قبل از سررسید — «فردا سررسید قسط شماست»
-async function sendUpcomingReminder(mobile, installmentTitle) {
-    const apiKey = process.env.SMSIR_API_KEY;
-    const templateId = process.env.SMSIR_UPCOMING_TEMPLATE_ID; // template جداگانه
-    if (!apiKey || !templateId) {
-        console.warn('⚠️ SMSIR_UPCOMING_TEMPLATE_ID در .env تنظیم نشده');
-        return { success: false, error: 'templateId تنظیم نشده' };
-    }
-    try {
-        const response = await axios.post(
-            SMSIR_BASE_URL,
-            {
-                mobile,
-                templateId: Number(templateId),
-                parameters: [{ name: 'TITLE', value: installmentTitle }]
-            },
-            {
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Accept': 'text/plain',
-                    'X-API-KEY': apiKey
-                },
-                timeout: 10000
-            }
-        );
-        const data = response.data;
-        if (data.status === 1) {
-            return { success: true, messageId: data.data.messageId };
-        }
-        return { success: false, error: data.message || 'ارسال پیامک ناموفق بود' };
-    } catch (err) {
-        const apiError = err.response?.data?.message;
-        console.error('SMS.ir upcoming reminder error:', apiError || err.message);
-        return { success: false, error: apiError || 'خطا در ارتباط با سرویس پیامک' };
-    }
-}
-
-module.exports = { sendOtp, sendInstallmentReminder, sendUpcomingReminder };
-
-
+module.exports = { sendOtp, sendInstallmentReminder };
