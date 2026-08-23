@@ -35,7 +35,6 @@ async function sendOtp(mobile, code) {
             return { success: true, messageId: data.data.messageId, cost: data.data.cost };
         }
         return { success: false, error: data.message || 'ارسال پیامک ناموفق بود' };
-
     } catch (err) {
         const apiError = err.response?.data?.message;
         console.error('SMS.ir error:', apiError || err.message);
@@ -43,7 +42,7 @@ async function sendOtp(mobile, code) {
     }
 }
 
-async function sendInstallmentReminder(mobile, installmentTitle, reminderType) {
+async function sendInstallmentReminder(mobile, installmentTitle) {
     const apiKey = process.env.SMSIR_API_KEY;
     const templateId = process.env.SMSIR_INSTALLMENT_TEMPLATE_ID;
 
@@ -52,10 +51,7 @@ async function sendInstallmentReminder(mobile, installmentTitle, reminderType) {
         return { success: false, error: 'templateId تنظیم نشده' };
     }
 
-    // ✅ متن بر اساس نوع یادآوری
-    const reminderText = reminderType === 'UPCOMING_DUE_DATE'
-        ? `فردا موعد پرداخت قسط ${installmentTitle} است`
-        : `امروز موعد پرداخت قسط ${installmentTitle} است`;
+    const reminderText = `امروز موعد پرداخت قسط ${installmentTitle} است`;
 
     try {
         const response = await axios.post(
@@ -82,7 +78,6 @@ async function sendInstallmentReminder(mobile, installmentTitle, reminderType) {
             return { success: true, messageId: data.data.messageId };
         }
         return { success: false, error: data.message || 'ارسال پیامک ناموفق بود' };
-
     } catch (err) {
         const apiError = err.response?.data?.message;
         console.error('SMS.ir installment reminder error:', apiError || err.message);
