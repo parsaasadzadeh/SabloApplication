@@ -2,30 +2,30 @@ const Transaction = require('../models/Transaction');
 const Notification = require('../models/Notification');
 const { sendInstallmentReminder } = require('./smsService');
 
-const DAYS_BEFORE_DUE = 1;
+const REMINDER_TYPE = 'DUE_DATE';
 
-function getDayRangeUTC(offsetDays = 0) {
+function getTodayRangeUTC() {
     const now = new Date();
     const start = new Date(Date.UTC(
         now.getUTCFullYear(),
         now.getUTCMonth(),
-        now.getUTCDate() + offsetDays,
+        now.getUTCDate(),
         0, 0, 0, 0
     ));
     const end = new Date(Date.UTC(
         now.getUTCFullYear(),
         now.getUTCMonth(),
-        now.getUTCDate() + offsetDays,
+        now.getUTCDate(),
         23, 59, 59, 999
     ));
     return { start, end };
 }
 
-async function processReminderBatch({ offsetDays, reminderType, buildTexts }) {
-    const batchResult = { checked: 0, notifCreated: 0, smsSent: 0, smsFailed: 0 };
-    const { start, end } = getDayRangeUTC(offsetDays);
+async function checkInstallments() {
+    const result = { checked: 0, notifCreated: 0, smsSent: 0, smsFailed: 0 };
+    const { start, end } = getTodayRangeUTC();
 
-    console.log(`📅 بازه جستجو [${reminderType}] (UTC):`, start.toISOString(), '←→', end.toISOString());
+    console.log(`📅 بازه جستجو [${REMINDER_TYPE}] (UTC):`, start.toISOString(), '←→', end.toISOString());
 
     const installments = await Transaction.find({
         type: 'INSTALLMENT',
@@ -33,10 +33,10 @@ async function processReminderBatch({ offsetDays, reminderType, buildTexts }) {
         dueDate: { $gte: start, $lte: end },
     }).populate('userId', 'phone name');
 
-    console.log(`🔍 تعداد اقساط [${reminderType}]: ${installments.length}`);
+    console.log(`🔍 تعداد اقساط [${REMINDER_TYPE}]: ${installments.length}`);
 
     for (const installment of installments) {
-        batchResult.checked++;
+        result.checked++;
         const user = installment.userId;
 
         if (!user || !user._id) {
@@ -44,7 +44,8 @@ async function processReminderBatch({ offsetDays, reminderType, buildTexts }) {
             continue;
         }
 
-        const { notifTitle, notifMessage } = buildTexts(installment);
+        const notifTitle = 'امروز موعد پرداخت قسط شماست ⏰';
+        const notifMessage = `کاربر عزیز، امروز موعد پرداخت قسط «${installment.title}» به مبلغ ${installment.amount.toLocaleString()} تومان است.`;
 
         // --- ۱. نوتیف داخل اپ ---
         try {
@@ -53,69 +54,32 @@ async function processReminderBatch({ offsetDays, reminderType, buildTexts }) {
                 title: notifTitle,
                 message: notifMessage,
                 relatedTransactionId: installment._id,
-                reminderType,
+                reminderType: REMINDER_TYPE,
             });
-            batchResult.notifCreated++;
-            console.log(`✅ نوتیف [${reminderType}] برای کاربر ${user._id} ثبت شد.`);
+            result.notifCreated++;
+            console.log(`✅ نوتیف [${REMINDER_TYPE}] برای کاربر ${user._id} ثبت شد.`);
         } catch (error) {
             if (error.code !== 11000) {
                 console.error(`❌ خطا در ساخت نوتیف قسط ${installment._id}:`, error.message);
             } else {
-                console.log(`ℹ️ نوتیف [${reminderType}] قبلاً ثبت شده بود، skip شد.`);
+                console.log(`ℹ️ نوتیف [${REMINDER_TYPE}] قبلاً ثبت شده بود، skip شد.`);
             }
         }
 
         // --- ۲. ارسال SMS ---
         if (user.phone) {
-            const smsResult = await sendInstallmentReminder(user.phone, installment.title, reminderType);
+            const smsResult = await sendInstallmentReminder(user.phone, installment.title);
             if (smsResult.success) {
-                batchResult.smsSent++;
-                console.log(`📱 SMS [${reminderType}] رفت به ${user.phone}`);
+                result.smsSent++;
+                console.log(`📱 SMS [${REMINDER_TYPE}] رفت به ${user.phone}`);
             } else {
-                batchResult.smsFailed++;
-                console.warn(`⚠️ SMS [${reminderType}] نرفت به ${user.phone}: ${smsResult.error}`);
+                result.smsFailed++;
+                console.warn(`⚠️ SMS [${REMINDER_TYPE}] نرفت به ${user.phone}: ${smsResult.error}`);
             }
         } else {
             console.warn(`⚠️ کاربر ${user._id} شماره نداره، SMS ارسال نشد.`);
         }
     }
-
-    return batchResult;
-}
-
-function mergeResults(...results) {
-    return results.reduce((acc, r) => ({
-        checked: acc.checked + r.checked,
-        notifCreated: acc.notifCreated + r.notifCreated,
-        smsSent: acc.smsSent + r.smsSent,
-        smsFailed: acc.smsFailed + r.smsFailed,
-    }), { checked: 0, notifCreated: 0, smsSent: 0, smsFailed: 0 });
-}
-
-async function checkInstallments() {
-    // یادآوری یک روز قبل از سررسید
-    const upcomingResult = await processReminderBatch({
-        offsetDays: DAYS_BEFORE_DUE,
-        reminderType: 'UPCOMING_DUE_DATE',
-        buildTexts: (installment) => ({
-            notifTitle: 'یادآوری سررسید قسط ⏳',
-            notifMessage: `کاربر عزیز، فردا موعد پرداخت قسط «${installment.title}» به مبلغ ${installment.amount.toLocaleString()} تومان است.`,
-        }),
-    });
-
-    // یادآوری روز سررسید
-    const dueTodayResult = await processReminderBatch({
-        offsetDays: 0,
-        reminderType: 'DUE_DATE',
-        buildTexts: (installment) => ({
-            notifTitle: 'امروز موعد پرداخت قسط شماست ⏰',
-            notifMessage: `کاربر عزیز، امروز موعد پرداخت قسط «${installment.title}» به مبلغ ${installment.amount.toLocaleString()} تومان است.`,
-        }),
-    });
-
-    const result = mergeResults(upcomingResult, dueTodayResult);
-    result.upcoming = upcomingResult;
-    result.dueToday = dueTodayResult;
 
     return result;
 }
