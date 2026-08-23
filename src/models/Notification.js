@@ -24,10 +24,10 @@ const notificationSchema = new mongoose.Schema({
         default: null
     },
     reminderType: {
-    type: String,
-    enum: ['DUE_DATE', 'UPCOMING_DUE_DATE'], 
-    default: null,
-},
+        type: String,
+        enum: ['DUE_DATE'],
+        default: null,
+    },
     createdAt: {
         type: Date,
         default: Date.now
@@ -38,7 +38,6 @@ notificationSchema.index(
     { relatedTransactionId: 1, reminderType: 1 },
     { unique: true, sparse: true }
 );
-
 notificationSchema.index(
     { createdAt: 1 },
     { expireAfterSeconds: 20 * 24 * 60 * 60 }
