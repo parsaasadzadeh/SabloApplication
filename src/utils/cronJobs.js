@@ -3,7 +3,7 @@ const { checkInstallments } = require('./checkInstallments');
 
 const startCronJobs = () => {
     cron.schedule('0 6 * * *', async () => {
-        console.log('⏳ در حال بررسی اقساط نزدیک به سررسید...');
+        console.log('⏳ در حال بررسی اقساط...');
         try {
             const result = await checkInstallments();
             console.log(
@@ -12,14 +12,8 @@ const startCronJobs = () => {
                 `${result.smsSent} SMS ارسال شد | ` +
                 `${result.smsFailed} SMS ناموفق`
             );
-            console.log(
-                `   └─ یادآوری فردا: ${result.upcoming.checked} قسط، ${result.upcoming.smsSent} SMS ارسال شد`
-            );
-            console.log(
-                `   └─ یادآوری امروز: ${result.dueToday.checked} قسط، ${result.dueToday.smsSent} SMS ارسال شد`
-            );
         } catch (err) {
-            console.error('❌ خطای کلی در اجرای cron سررسید:', err.message);
+            console.error('❌ خطای کلی در اجرای cron:', err.message);
         }
     });
 };
