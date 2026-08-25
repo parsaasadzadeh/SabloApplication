@@ -23,7 +23,7 @@ category: {
         'other'
     ],
     default: null 
-}
+},
     loanId: { type: mongoose.Schema.Types.ObjectId, ref: 'Transaction', default: null },
     
     dueDate: { type: Date }, // تاریخ سررسید قسط یا یادآوری وام
