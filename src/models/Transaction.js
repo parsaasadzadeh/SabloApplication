@@ -11,14 +11,23 @@ const transactionSchema = new mongoose.Schema({
     title: { type: String, required: true },
     description: { type: String },
     
-    // دسته‌بندی برای تراکنش‌ها (مثلاً: حقوق، اجاره خانه، رستوران)
-    category: { type: String, default: 'عمومی' }, 
-    
-    // اگر تراکنش از نوع قسط (INSTALLMENT) باشه، به کدام وام وصله؟
+category: { 
+    type: String, 
+    enum: [
+        'food', 'coffee', 'grocery',
+        'rent', 'electricity', 'water', 'gas', 'internet', 'phone',
+        'transport', 'fuel',
+        'health', 'sport',
+        'entertainment', 'clothing', 'cigarette',
+        'salary', 'freelance',
+        'other'
+    ],
+    default: null 
+}
     loanId: { type: mongoose.Schema.Types.ObjectId, ref: 'Transaction', default: null },
     
     dueDate: { type: Date }, // تاریخ سررسید قسط یا یادآوری وام
-    isPaid: { type: Boolean, default: false }, // وضعیت پرداخت (مخصوص اقساط)
+    isPaid: { type: Boolean, default: false }, //وضعیت پرداخت (مخصوص اقساط)
     
     date: { type: Date, default: Date.now }
 }, { timestamps: true });
