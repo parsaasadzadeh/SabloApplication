@@ -47,11 +47,9 @@ async function sendInstallmentReminder(mobile, installmentTitle) {
     const templateId = process.env.SMSIR_INSTALLMENT_TEMPLATE_ID;
 
     if (!apiKey || !templateId) {
-        console.warn('⚠️ SMSIR_INSTALLMENT_TEMPLATE_ID در .env تنظیم نشده - SMS ارسال نشد');
+        console.warn('⚠️ SMSIR_INSTALLMENT_TEMPLATE_ID تنظیم نشده');
         return { success: false, error: 'templateId تنظیم نشده' };
     }
-
-    const reminderText = `امروز موعد پرداخت قسط ${installmentTitle} است`;
 
     try {
         const response = await axios.post(
@@ -60,7 +58,7 @@ async function sendInstallmentReminder(mobile, installmentTitle) {
                 mobile,
                 templateId: Number(templateId),
                 parameters: [
-                    { name: 'TITLE', value: reminderText }
+                    { name: 'TITLE', value: installmentTitle.substring(0, 25) } // ← تنها تغییر
                 ]
             },
             {
@@ -77,7 +75,8 @@ async function sendInstallmentReminder(mobile, installmentTitle) {
         if (data.status === 1) {
             return { success: true, messageId: data.data.messageId };
         }
-        return { success: false, error: data.message || 'ارسال پیامک ناموفق بود' };
+        return { success: false, error: data.message || 'ارسال ناموفق' };
+
     } catch (err) {
         const apiError = err.response?.data?.message;
         console.error('SMS.ir installment reminder error:', apiError || err.message);
