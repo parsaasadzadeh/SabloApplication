@@ -3,7 +3,7 @@ const cors = require('cors');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const mongoSanitize = require('express-mongo-sanitize');
-const xss = require('xss-clean');
+const xss = require('xss');
 
 const authRoutes = require('./routes/authRoutes');
 const financeRoutes = require('./routes/financeRoutes');
@@ -20,7 +20,6 @@ const app = express();
 
 app.use(helmet());
 
-// ✅ CORS باز برای React Native — امنیت رو JWT انجام میده
 app.use(cors({
   origin: '*',
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
@@ -30,13 +29,26 @@ app.use(cors({
 app.use(express.json({ limit: '10kb' }));
 app.use(express.urlencoded({ extended: true, limit: '10kb' }));
 
-// ✅ جلوگیری از ویروس دیتابیس
+// جلوگیری از NoSQL Injection
 app.use(mongoSanitize());
 
-// ✅ جلوگیری از XSS
-app.use(xss());
+// جلوگیری از XSS - sanitize دستی روی body
+app.use((req, res, next) => {
+  if (req.body) {
+    const sanitizeValue = (value) => {
+      if (typeof value === 'string') return xss(value);
+      if (typeof value === 'object' && value !== null) {
+        Object.keys(value).forEach(key => {
+          value[key] = sanitizeValue(value[key]);
+        });
+      }
+      return value;
+    };
+    req.body = sanitizeValue(req.body);
+  }
+  next();
+});
 
-// ✅ Rate limiting
 const globalLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 100,
