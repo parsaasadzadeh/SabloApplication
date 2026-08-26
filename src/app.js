@@ -2,7 +2,6 @@ const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
-const mongoSanitize = require('express-mongo-sanitize');
 const xss = require('xss');
 
 const authRoutes = require('./routes/authRoutes');
@@ -29,23 +28,35 @@ app.use(cors({
 app.use(express.json({ limit: '10kb' }));
 app.use(express.urlencoded({ extended: true, limit: '10kb' }));
 
-// جلوگیری از NoSQL Injection
-app.use(mongoSanitize());
-
-// جلوگیری از XSS - sanitize دستی روی body
+// جلوگیری از NoSQL Injection - سازگار با Express 5
 app.use((req, res, next) => {
-  if (req.body) {
-    const sanitizeValue = (value) => {
-      if (typeof value === 'string') return xss(value);
-      if (typeof value === 'object' && value !== null) {
-        Object.keys(value).forEach(key => {
-          value[key] = sanitizeValue(value[key]);
-        });
-      }
-      return value;
-    };
-    req.body = sanitizeValue(req.body);
-  }
+  const sanitizeObject = (obj) => {
+    if (obj && typeof obj === 'object') {
+      Object.keys(obj).forEach(key => {
+        if (key.startsWith('$') || key.includes('.')) {
+          delete obj[key];
+        } else {
+          sanitizeObject(obj[key]);
+        }
+      });
+    }
+  };
+  if (req.body) sanitizeObject(req.body);
+  next();
+});
+
+// جلوگیری از XSS
+app.use((req, res, next) => {
+  const sanitizeValue = (value) => {
+    if (typeof value === 'string') return xss(value);
+    if (typeof value === 'object' && value !== null) {
+      Object.keys(value).forEach(key => {
+        value[key] = sanitizeValue(value[key]);
+      });
+    }
+    return value;
+  };
+  if (req.body) req.body = sanitizeValue(req.body);
   next();
 });
 
