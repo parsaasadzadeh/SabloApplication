@@ -494,3 +494,73 @@ exports.exportTransactionsCSV = async (req, res) => {
         res.status(500).json({ message: 'خطای سرور', error: error.message });
     }
 };
+
+// نمای کلی چند ماه اخیر — پایه‌ی نمودار ستونی/لیست ماه‌ها
+exports.getMonthlyOverview = async (req, res) => {
+    try {
+        const userId = new mongoose.Types.ObjectId(req.user.id);
+        const monthsCount = Math.min(parseInt(req.query.months) || 6, 24);
+
+        const now = new Date();
+        const startRange = new Date(now.getFullYear(), now.getMonth() - (monthsCount - 1), 1);
+
+        const stats = await Transaction.aggregate([
+            { $match: { userId, date: { $gte: startRange } } },
+            {
+                $group: {
+                    _id: {
+                        year: { $year: '$date' },
+                        month: { $month: '$date' },
+                        type: '$type'
+                    },
+                    totalAmount: {
+                        $sum: {
+                            $cond: [
+                                { $eq: ['$type', 'INSTALLMENT'] },
+                                { $cond: ['$isPaid', '$amount', 0] },
+                                '$amount'
+                            ]
+                        }
+                    }
+                }
+            }
+        ]);
+
+        const monthsMap = {};
+        stats.forEach(item => {
+            const key = `${item._id.year}-${item._id.month}`;
+            if (!monthsMap[key]) {
+                monthsMap[key] = { income: 0, expense: 0, loans: 0, installmentsPaid: 0 };
+            }
+            if (item._id.type === 'INCOME') monthsMap[key].income = item.totalAmount;
+            if (item._id.type === 'EXPENSE') monthsMap[key].expense = item.totalAmount;
+            if (item._id.type === 'LOAN') monthsMap[key].loans = item.totalAmount;
+            if (item._id.type === 'INSTALLMENT') monthsMap[key].installmentsPaid = item.totalAmount;
+        });
+
+        const result = [];
+        for (let i = 0; i < monthsCount; i++) {
+            const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+            const key = `${d.getFullYear()}-${d.getMonth() + 1}`;
+            const data = monthsMap[key] || { income: 0, expense: 0, loans: 0, installmentsPaid: 0 };
+            const from = new Date(d.getFullYear(), d.getMonth(), 1);
+            const to = new Date(d.getFullYear(), d.getMonth() + 1, 0, 23, 59, 59);
+
+            result.push({
+                year: d.getFullYear(),
+                month: d.getMonth() + 1,
+                from,
+                to,
+                income: data.income,
+                expense: data.expense,
+                balance: (data.income + data.loans) - (data.expense + data.installmentsPaid)
+            });
+        }
+
+        result.reverse(); // قدیمی -> جدید
+
+        res.status(200).json({ months: result });
+    } catch (error) {
+        res.status(500).json({ message: 'خطای سرور', error: error.message });
+    }
+};
