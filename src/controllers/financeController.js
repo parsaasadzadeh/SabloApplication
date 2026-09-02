@@ -91,10 +91,29 @@ const computeFinanceSummary = async (userId, from, to) => {
 // ثبت تراکنش جدید
 exports.addTransaction = async (req, res) => {
     try {
-        const { type, amount, title, description, dueDate, loanId, category } = req.body;
+        const { type, amount, title, description, dueDate, loanId, category, date } = req.body;
 
         if (amount <= 0) {
             return res.status(400).json({ message: 'مبلغ باید بیشتر از صفر باشد' });
+        }
+
+        // تاریخ تراکنش: اگه کاربر دستی نداده باشه، همین الان.
+        // اگه داده باشه (مثلاً تراکنش ۲ سال پیش)، همون رو ثبت می‌کنیم —
+        // این تاریخ برای مرتب‌سازی و گزارش‌ها استفاده میشه، جدا از createdAt
+        // که خودِ mongoose خودکار و تغییرناپذیر می‌سازه (یعنی همیشه معلومه این
+        // رکورد واقعاً کِی وارد سیستم شده، حتی اگه تاریخ تراکنشش قدیمی باشه).
+        let txDate = new Date();
+        if (date) {
+            const parsedDate = new Date(date);
+            if (isNaN(parsedDate.getTime())) {
+                return res.status(400).json({ message: 'تاریخ تراکنش نامعتبر است' });
+            }
+            // یک روز اختلاف رو برای تفاوت تایم‌زون مجاز می‌شماریم
+            const oneDayMs = 24 * 60 * 60 * 1000;
+            if (parsedDate.getTime() > Date.now() + oneDayMs) {
+                return res.status(400).json({ message: 'تاریخ تراکنش نمی‌تواند در آینده باشد' });
+            }
+            txDate = parsedDate;
         }
 
         const newTx = await Transaction.create({
@@ -104,6 +123,7 @@ exports.addTransaction = async (req, res) => {
             title,
             description,
             dueDate,
+            date: txDate,
             category: resolveCategoryId(category),
             loanId: loanId ? new mongoose.Types.ObjectId(loanId) : null,
             isPaid: ['LOAN', 'INCOME', 'EXPENSE'].includes(type) ? true : false
@@ -275,7 +295,7 @@ exports.payInstallment = async (req, res) => {
 exports.updateTransaction = async (req, res) => {
     try {
         const { id } = req.params;
-        const { amount, title, description, dueDate, category } = req.body;
+        const { amount, title, description, dueDate, category, date } = req.body;
 
         if (amount !== undefined && amount <= 0) {
             return res.status(400).json({ message: 'مبلغ باید بیشتر از صفر باشد' });
@@ -287,6 +307,20 @@ exports.updateTransaction = async (req, res) => {
         if (description !== undefined) updateFields.description = description;
         if (dueDate !== undefined) updateFields.dueDate = dueDate;
         if (category !== undefined) updateFields.category = resolveCategoryId(category);
+
+        // اجازه‌ی ویرایش تاریخ تراکنش هم می‌دیم — مثلاً کاربر یه تراکنش قدیمی رو
+        // ثبت کرده ولی تاریخش رو اشتباه زده، بتونه بعداً درستش کنه
+        if (date !== undefined) {
+            const parsedDate = new Date(date);
+            if (isNaN(parsedDate.getTime())) {
+                return res.status(400).json({ message: 'تاریخ تراکنش نامعتبر است' });
+            }
+            const oneDayMs = 24 * 60 * 60 * 1000;
+            if (parsedDate.getTime() > Date.now() + oneDayMs) {
+                return res.status(400).json({ message: 'تاریخ تراکنش نمی‌تواند در آینده باشد' });
+            }
+            updateFields.date = parsedDate;
+        }
 
         const updatedTx = await Transaction.findOneAndUpdate(
             { _id: id, userId: req.user.id },
