@@ -11,6 +11,7 @@ const {
     getMonthlyComparison,
     getCategoryStats,
     getCategories,
+    getMonthlyOverview
 } = require('../controllers/financeController');
 const { protect } = require('../middlewares/authMiddleware');
 
@@ -26,5 +27,6 @@ router.get('/monthly-comparison', getMonthlyComparison);
 router.get('/export-csv', exportTransactionsCSV);
 router.get('/categories', getCategories);
 router.get('/category-stats', getCategoryStats);
+router.get('/monthly-overview', getMonthlyOverview);
 
 module.exports = router;
