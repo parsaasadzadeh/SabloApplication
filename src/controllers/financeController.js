@@ -9,94 +9,35 @@ const resolveCategoryId = (category) => {
     return VALID_CATEGORY_IDS.includes(category) ? category : null;
 };
 
-// ثبت تراکنش جدید
-exports.addTransaction = async (req, res) => {
-    try {
-        const { type, amount, title, description, dueDate, loanId, category } = req.body;
+// ---------------------------------------------------------------------
+// helperهای مشترک — همه‌ی endpointهای خلاصه‌ی مالی از این دو تا استفاده می‌کنن
+// تا منطق محاسبه فقط یک‌جا نوشته بشه و هیچ‌وقت جاهای مختلف از هم عقب نیفتن
+// ---------------------------------------------------------------------
 
-        if (amount <= 0) {
-            return res.status(400).json({ message: 'مبلغ باید بیشتر از صفر باشد' });
+const buildDateMatch = (from, to) => {
+    const dateMatch = {};
+    if (from || to) {
+        dateMatch.date = {};
+        if (from) dateMatch.date.$gte = new Date(from);
+        if (to) {
+            const toDate = new Date(to);
+            toDate.setHours(23, 59, 59, 999);
+            dateMatch.date.$lte = toDate;
         }
-
-        const newTx = await Transaction.create({
-            userId: req.user.id,
-            type,
-            amount,
-            title,
-            description,
-            dueDate,
-            category: resolveCategoryId(category),
-            loanId: loanId ? new mongoose.Types.ObjectId(loanId) : null,
-            isPaid: ['LOAN', 'INCOME', 'EXPENSE'].includes(type) ? true : false
-        });
-
-        res.status(201).json({ message: 'تراکنش با موفقیت ثبت شد', transaction: newTx });
-    } catch (error) {
-        res.status(500).json({ message: 'خطای سرور', error: error.message });
     }
+    return dateMatch;
 };
 
-// لیست تراکنش‌ها
-exports.getMyTransactions = async (req, res) => {
-    try {
-        const page = parseInt(req.query.page) || 1;
-        const limit = parseInt(req.query.limit) || 10;
-        const skip = (page - 1) * limit;
-        const search = req.query.search?.trim();
-        const fromDate = req.query.from;
-        const toDate = req.query.to;
-
-        const filter = { userId: req.user.id };
-
-        if (fromDate || toDate) {
-            filter.date = {};
-            if (fromDate) filter.date.$gte = new Date(fromDate);
-            if (toDate) {
-                const to = new Date(toDate);
-                to.setHours(23, 59, 59, 999);
-                filter.date.$lte = to;
-            }
-        }
-
-        if (search) {
-            filter.$or = [
-                { title: { $regex: search, $options: 'i' } },
-                { description: { $regex: search, $options: 'i' } },
-            ];
-        }
-
-        const [transactions, totalTransactions] = await Promise.all([
-            Transaction.find(filter).sort({ date: -1 }).skip(skip).limit(limit),
-            Transaction.countDocuments(filter),
-        ]);
-
-        // اضافه کردن اطلاعات دسته‌بندی به هر تراکنش
-        const enriched = transactions.map(tx => {
-            const txObj = tx.toObject();
-            if (txObj.category) {
-                const cat = CATEGORIES.find(c => c.id === txObj.category);
-                txObj.categoryInfo = cat || null;
-            } else {
-                txObj.categoryInfo = null;
-            }
-            return txObj;
-        });
-
-        res.status(200).json({
-            currentPage: page,
-            totalPages: Math.ceil(totalTransactions / limit),
-            totalItems: totalTransactions,
-            transactions: enriched,
-        });
-    } catch (error) {
-        res.status(500).json({ message: 'خطای سرور', error: error.message });
-    }
-};
-
-// تحلیل‌گر هوش مصنوعی
-exports.calculateUserStats = async (userId) => {
+// خروجی این تابع "منبع واحد حقیقت" برای خلاصه‌ی مالیه.
+// از/تا اختیاریه؛ اگه ندی، یعنی کل تاریخچه.
+const computeFinanceSummary = async (userId, from, to) => {
     const stats = await Transaction.aggregate([
-        { $match: { userId: new mongoose.Types.ObjectId(userId) } },
+        {
+            $match: {
+                userId: new mongoose.Types.ObjectId(userId),
+                ...buildDateMatch(from, to)
+            }
+        },
         {
             $facet: {
                 totals: [
@@ -134,97 +75,139 @@ exports.calculateUserStats = async (userId) => {
         if (item._id === 'INSTALLMENT') installmentsPaid = item.totalAmount;
     });
 
+    // نام‌گذاری فیلدها استاندارد و ثابته — هر بخش فرانت (ChartDonut، MonthSelector،
+    // کارت‌های خلاصه) دقیقاً همین اسم‌ها رو می‌خونه، تا هیچ‌وقت شکل داده بین
+    // صفحات مختلف فرق نکنه.
     return {
-        cashBalance: (income + loans) - (expense + installmentsPaid),
         totalIncome: income,
         totalExpense: expense,
         activeDebt: loans - installmentsPaid,
+        cashBalance: (income + loans) - (expense + installmentsPaid),
         unpaidInstallmentsCount: unpaid.count,
         unpaidInstallmentsAmount: unpaid.totalRemaining
     };
 };
 
-// محاسبات حساب — نمودار دایره‌ای قدیمی (درآمد/خرج/قسط)
-exports.getFinanceStats = async (req, res) => {
+// ثبت تراکنش جدید
+exports.addTransaction = async (req, res) => {
     try {
-        const userId = new mongoose.Types.ObjectId(req.user.id);
+        const { type, amount, title, description, dueDate, loanId, category } = req.body;
 
-        const stats = await Transaction.aggregate([
-            { $match: { userId } },
-            {
-                $facet: {
-                    totals: [
-                        {
-                            $group: {
-                                _id: '$type',
-                                totalAmount: {
-                                    $sum: {
-                                        $cond: [
-                                            { $eq: ['$type', 'INSTALLMENT'] },
-                                            { $cond: ['$isPaid', '$amount', 0] },
-                                            '$amount'
-                                        ]
-                                    }
-                                }
-                            }
-                        }
-                    ],
-                    unpaidInstallments: [
-                        { $match: { type: 'INSTALLMENT', isPaid: false } },
-                        { $group: { _id: null, totalRemaining: { $sum: '$amount' }, count: { $sum: 1 } } }
-                    ]
-                }
-            }
+        if (amount <= 0) {
+            return res.status(400).json({ message: 'مبلغ باید بیشتر از صفر باشد' });
+        }
+
+        const newTx = await Transaction.create({
+            userId: req.user.id,
+            type,
+            amount,
+            title,
+            description,
+            dueDate,
+            category: resolveCategoryId(category),
+            loanId: loanId ? new mongoose.Types.ObjectId(loanId) : null,
+            isPaid: ['LOAN', 'INCOME', 'EXPENSE'].includes(type) ? true : false
+        });
+
+        res.status(201).json({ message: 'تراکنش با موفقیت ثبت شد', transaction: newTx });
+    } catch (error) {
+        res.status(500).json({ message: 'خطای سرور', error: error.message });
+    }
+};
+
+// لیست تراکنش‌ها
+exports.getMyTransactions = async (req, res) => {
+    try {
+        const page = parseInt(req.query.page) || 1;
+        const limit = parseInt(req.query.limit) || 10;
+        const skip = (page - 1) * limit;
+        const search = req.query.search?.trim();
+        const fromDate = req.query.from;
+        const toDate = req.query.to;
+
+        const filter = { userId: req.user.id, ...buildDateMatch(fromDate, toDate) };
+
+        if (search) {
+            filter.$or = [
+                { title: { $regex: search, $options: 'i' } },
+                { description: { $regex: search, $options: 'i' } },
+            ];
+        }
+
+        const [transactions, totalTransactions] = await Promise.all([
+            Transaction.find(filter).sort({ date: -1 }).skip(skip).limit(limit),
+            Transaction.countDocuments(filter),
         ]);
 
-        const rawTotals = stats[0].totals;
-        const unpaidInstallmentsData = stats[0].unpaidInstallments[0] || { totalRemaining: 0, count: 0 };
-
-        let income = 0, expense = 0, loans = 0, installmentsPaid = 0;
-        rawTotals.forEach(item => {
-            if (item._id === 'INCOME') income = item.totalAmount;
-            if (item._id === 'EXPENSE') expense = item.totalAmount;
-            if (item._id === 'LOAN') loans = item.totalAmount;
-            if (item._id === 'INSTALLMENT') installmentsPaid = item.totalAmount;
+        // اضافه کردن اطلاعات دسته‌بندی به هر تراکنش
+        const enriched = transactions.map(tx => {
+            const txObj = tx.toObject();
+            if (txObj.category) {
+                const cat = CATEGORIES.find(c => c.id === txObj.category);
+                txObj.categoryInfo = cat || null;
+            } else {
+                txObj.categoryInfo = null;
+            }
+            return txObj;
         });
 
         res.status(200).json({
-            summary: {
-                cashBalance: (income + loans) - (expense + installmentsPaid),
-                totalIncome: income,
-                totalExpense: expense,
-                activeDebt: loans - installmentsPaid,
-                unpaidInstallmentsCount: unpaidInstallmentsData.count,
-                unpaidInstallmentsAmount: unpaidInstallmentsData.totalRemaining
-            }
+            currentPage: page,
+            totalPages: Math.ceil(totalTransactions / limit),
+            totalItems: totalTransactions,
+            transactions: enriched,
         });
     } catch (error) {
         res.status(500).json({ message: 'خطای سرور', error: error.message });
     }
 };
 
-// نمودار دایره‌ای جدید — بر اساس دسته‌بندی
+// تحلیل‌گر هوش مصنوعی — از همون helper مشترک استفاده می‌کنه (کل تاریخچه)
+exports.calculateUserStats = async (userId) => {
+    return computeFinanceSummary(userId);
+};
+
+// خلاصه‌ی مالی — هم برای نمودار دایره‌ای (ChartDonut) هم برای انتخاب‌گر ماه
+// (MonthSelector) استفاده می‌شه. اگه from/to بدی، فقط همون بازه؛ وگرنه کل تاریخچه.
+exports.getFinanceStats = async (req, res) => {
+    try {
+        const { from, to } = req.query;
+        const summary = await computeFinanceSummary(req.user.id, from, to);
+        res.status(200).json({ summary });
+    } catch (error) {
+        res.status(500).json({ message: 'خطای سرور', error: error.message });
+    }
+};
+
+// نمودار دایره‌ای بر اساس دسته‌بندی
+// نکته‌ی مهم: درآمد (INCOME) اصلاً دسته‌بندی نمی‌گیره (طبق طراحی فرم ثبت تراکنش)،
+// پس وقتی type=INCOME خواسته میشه، به‌جای فیلتر روی category (که همیشه صفر
+// برمی‌گردوند)، جمع کل درآمدهای همون بازه رو مستقیم حساب می‌کنیم.
 exports.getCategoryStats = async (req, res) => {
     try {
         const userId = new mongoose.Types.ObjectId(req.user.id);
         const { type, from, to } = req.query;
+        const dateMatch = buildDateMatch(from, to);
 
-        const match = {
-            userId,
-            category: { $ne: null, $exists: true }
-        };
-
-        if (type) match.type = type;
-
-        if (from || to) {
-            match.date = {};
-            if (from) match.date.$gte = new Date(from);
-            if (to) {
-                const toDate = new Date(to);
-                toDate.setHours(23, 59, 59, 999);
-                match.date.$lte = toDate;
-            }
+        if (type === 'INCOME') {
+            const incomeAgg = await Transaction.aggregate([
+                { $match: { userId, type: 'INCOME', ...dateMatch } },
+                { $group: { _id: null, totalAmount: { $sum: '$amount' }, count: { $sum: 1 } } }
+            ]);
+            const income = incomeAgg[0] || { totalAmount: 0, count: 0 };
+            const categories = income.totalAmount > 0 ? [{
+                id: 'INCOME',
+                label: 'درآمد',
+                icon: '💰',
+                totalAmount: income.totalAmount,
+                count: income.count,
+                percentage: 100
+            }] : [];
+            return res.status(200).json({ total: income.totalAmount, categories });
         }
+
+        const match = { userId, category: { $ne: null, $exists: true }, ...dateMatch };
+        if (type) match.type = type;
 
         const stats = await Transaction.aggregate([
             { $match: match },
@@ -347,7 +330,7 @@ exports.deleteTransaction = async (req, res) => {
 // مقایسه ماه جاری با ماه قبل
 exports.getMonthlyComparison = async (req, res) => {
     try {
-        const userId = new mongoose.Types.ObjectId(req.user.id);
+        const userId = req.user.id;
         const now = new Date();
 
         const currentMonthStart = new Date(now.getFullYear(), now.getMonth(), 1);
@@ -355,54 +338,9 @@ exports.getMonthlyComparison = async (req, res) => {
         const prevMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
         const prevMonthEnd = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59);
 
-        const calcStats = async (start, end) => {
-            const stats = await Transaction.aggregate([
-                { $match: { userId, date: { $gte: start, $lte: end } } },
-                {
-                    $facet: {
-                        totals: [
-                            {
-                                $group: {
-                                    _id: '$type',
-                                    totalAmount: {
-                                        $sum: {
-                                            $cond: [
-                                                { $eq: ['$type', 'INSTALLMENT'] },
-                                                { $cond: ['$isPaid', '$amount', 0] },
-                                                '$amount'
-                                            ]
-                                        }
-                                    }
-                                }
-                            }
-                        ],
-                        unpaidInstallments: [
-                            { $match: { type: 'INSTALLMENT', isPaid: false } },
-                            { $group: { _id: null, totalRemaining: { $sum: '$amount' } } }
-                        ]
-                    }
-                }
-            ]);
-
-            const rawTotals = stats[0].totals;
-            let income = 0, expense = 0, loans = 0, installmentsPaid = 0;
-            rawTotals.forEach(item => {
-                if (item._id === 'INCOME') income = item.totalAmount;
-                if (item._id === 'EXPENSE') expense = item.totalAmount;
-                if (item._id === 'LOAN') loans = item.totalAmount;
-                if (item._id === 'INSTALLMENT') installmentsPaid = item.totalAmount;
-            });
-
-            return {
-                income,
-                expense,
-                cashBalance: (income + loans) - (expense + installmentsPaid),
-            };
-        };
-
         const [current, previous] = await Promise.all([
-            calcStats(currentMonthStart, currentMonthEnd),
-            calcStats(prevMonthStart, prevMonthEnd),
+            computeFinanceSummary(userId, currentMonthStart.toISOString(), currentMonthEnd.toISOString()),
+            computeFinanceSummary(userId, prevMonthStart.toISOString(), prevMonthEnd.toISOString()),
         ]);
 
         const calcChange = (curr, prev) => {
@@ -411,11 +349,19 @@ exports.getMonthlyComparison = async (req, res) => {
         };
 
         res.status(200).json({
-            current,
-            previous,
+            current: {
+                income: current.totalIncome,
+                expense: current.totalExpense,
+                cashBalance: current.cashBalance,
+            },
+            previous: {
+                income: previous.totalIncome,
+                expense: previous.totalExpense,
+                cashBalance: previous.cashBalance,
+            },
             changes: {
-                income: calcChange(current.income, previous.income),
-                expense: calcChange(current.expense, previous.expense),
+                income: calcChange(current.totalIncome, previous.totalIncome),
+                expense: calcChange(current.totalExpense, previous.totalExpense),
                 cashBalance: calcChange(current.cashBalance, previous.cashBalance),
             }
         });
@@ -431,17 +377,7 @@ exports.exportTransactionsCSV = async (req, res) => {
         const fromDate = req.query.from;
         const toDate = req.query.to;
 
-        const filter = { userId: req.user.id };
-
-        if (fromDate || toDate) {
-            filter.date = {};
-            if (fromDate) filter.date.$gte = new Date(fromDate);
-            if (toDate) {
-                const to = new Date(toDate);
-                to.setHours(23, 59, 59, 999);
-                filter.date.$lte = to;
-            }
-        }
+        const filter = { userId: req.user.id, ...buildDateMatch(fromDate, toDate) };
 
         if (search) {
             filter.$or = [
