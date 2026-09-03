@@ -1,17 +1,13 @@
 const Transaction = require('../models/Transaction');
+const Category = require('../models/Category');
 const mongoose = require('mongoose');
 const CATEGORIES = require('../constants/categories');
 
 const VALID_CATEGORY_IDS = CATEGORIES.map(c => c.id);
-
-const resolveCategoryId = (category) => {
-    if (!category) return null;
-    return VALID_CATEGORY_IDS.includes(category) ? category : null;
-};
+const MAX_CUSTOM_CATEGORIES_PER_USER = 30;
 
 // ---------------------------------------------------------------------
-// helperهای مشترک — همه‌ی endpointهای خلاصه‌ی مالی از این دو تا استفاده می‌کنن
-// تا منطق محاسبه فقط یک‌جا نوشته بشه و هیچ‌وقت جاهای مختلف از هم عقب نیفتن
+// helperهای مشترک برای خلاصه‌ی مالی — از قبل موجود بودن، دست‌نخورده‌ن
 // ---------------------------------------------------------------------
 
 const buildDateMatch = (from, to) => {
@@ -28,8 +24,6 @@ const buildDateMatch = (from, to) => {
     return dateMatch;
 };
 
-// خروجی این تابع "منبع واحد حقیقت" برای خلاصه‌ی مالیه.
-// از/تا اختیاریه؛ اگه ندی، یعنی کل تاریخچه.
 const computeFinanceSummary = async (userId, from, to) => {
     const stats = await Transaction.aggregate([
         {
@@ -75,9 +69,6 @@ const computeFinanceSummary = async (userId, from, to) => {
         if (item._id === 'INSTALLMENT') installmentsPaid = item.totalAmount;
     });
 
-    // نام‌گذاری فیلدها استاندارد و ثابته — هر بخش فرانت (ChartDonut، MonthSelector،
-    // کارت‌های خلاصه) دقیقاً همین اسم‌ها رو می‌خونه، تا هیچ‌وقت شکل داده بین
-    // صفحات مختلف فرق نکنه.
     return {
         totalIncome: income,
         totalExpense: expense,
@@ -86,6 +77,37 @@ const computeFinanceSummary = async (userId, from, to) => {
         unpaidInstallmentsCount: unpaid.count,
         unpaidInstallmentsAmount: unpaid.totalRemaining
     };
+};
+
+// ---------------------------------------------------------------------
+// helperهای دسته‌بندی — منبع واحد برای «این category id معتبره یا نه»
+// و «label/icon این id چیه»، چه پیش‌فرض باشه چه شخصیِ همون کاربر.
+// هر جای دیگه‌ی کنترلر که به دسته‌بندی نیاز داره از همین دو تابع استفاده می‌کنه
+// تا هیچ‌وقت منطق دوباره‌نویسی نشه و از هم عقب نیفته.
+// ---------------------------------------------------------------------
+
+// یک Map از همه‌ی دسته‌بندی‌های در دسترسِ این کاربر می‌سازه: پیش‌فرض‌ها + شخصی‌های خودش
+const getUserCategoryMap = async (userId) => {
+    const customCats = await Category.find({ userId }).lean();
+    const map = new Map();
+    CATEGORIES.forEach(c => map.set(c.id, { label: c.label, icon: c.icon, isCustom: false }));
+    customCats.forEach(c => map.set(c.id, { label: c.label, icon: c.icon, isCustom: true }));
+    return map;
+};
+
+// اعتبارسنجی category ورودی نسبت به همون Map — اگه معتبر نبود null برمی‌گردونه
+// (رفتار دقیقاً مثل resolveCategoryId قبلی، فقط حالا شخصی‌ها رو هم می‌شناسه)
+const resolveCategoryId = (category, categoryMap) => {
+    if (!category) return null;
+    return categoryMap.has(category) ? category : null;
+};
+
+// وقتی یه دسته‌بندی (مثلاً چون کاربر حذفش کرده) توی Map پیدا نشه، به‌جای کرش یا
+// خالی موندن، یه لیبل قابل‌فهم نشون می‌دیم — تراکنش خودش دست‌نخورده می‌مونه
+const FALLBACK_CATEGORY_INFO = { label: 'دسته‌بندی حذف‌شده', icon: '❓' };
+const lookupCategoryInfo = (categoryId, categoryMap) => {
+    if (!categoryId) return null;
+    return categoryMap.get(categoryId) || FALLBACK_CATEGORY_INFO;
 };
 
 // ثبت تراکنش جدید
@@ -97,24 +119,22 @@ exports.addTransaction = async (req, res) => {
             return res.status(400).json({ message: 'مبلغ باید بیشتر از صفر باشد' });
         }
 
-        // تاریخ تراکنش: اگه کاربر دستی نداده باشه، همین الان.
-        // اگه داده باشه (مثلاً تراکنش ۲ سال پیش)، همون رو ثبت می‌کنیم —
-        // این تاریخ برای مرتب‌سازی و گزارش‌ها استفاده میشه، جدا از createdAt
-        // که خودِ mongoose خودکار و تغییرناپذیر می‌سازه (یعنی همیشه معلومه این
-        // رکورد واقعاً کِی وارد سیستم شده، حتی اگه تاریخ تراکنشش قدیمی باشه).
         let txDate = new Date();
         if (date) {
             const parsedDate = new Date(date);
             if (isNaN(parsedDate.getTime())) {
                 return res.status(400).json({ message: 'تاریخ تراکنش نامعتبر است' });
             }
-            // یک روز اختلاف رو برای تفاوت تایم‌زون مجاز می‌شماریم
             const oneDayMs = 24 * 60 * 60 * 1000;
             if (parsedDate.getTime() > Date.now() + oneDayMs) {
                 return res.status(400).json({ message: 'تاریخ تراکنش نمی‌تواند در آینده باشد' });
             }
             txDate = parsedDate;
         }
+
+        // اعتبارسنجی دسته‌بندی نسبت به پیش‌فرض‌ها + دسته‌بندی‌های شخصیِ همین کاربر
+        const categoryMap = await getUserCategoryMap(req.user.id);
+        const resolvedCategory = resolveCategoryId(category, categoryMap);
 
         const newTx = await Transaction.create({
             userId: req.user.id,
@@ -124,7 +144,7 @@ exports.addTransaction = async (req, res) => {
             description,
             dueDate,
             date: txDate,
-            category: resolveCategoryId(category),
+            category: resolvedCategory,
             loanId: loanId ? new mongoose.Types.ObjectId(loanId) : null,
             isPaid: ['LOAN', 'INCOME', 'EXPENSE'].includes(type) ? true : false
         });
@@ -154,20 +174,17 @@ exports.getMyTransactions = async (req, res) => {
             ];
         }
 
-        const [transactions, totalTransactions] = await Promise.all([
+        const [transactions, totalTransactions, categoryMap] = await Promise.all([
             Transaction.find(filter).sort({ date: -1 }).skip(skip).limit(limit),
             Transaction.countDocuments(filter),
+            getUserCategoryMap(req.user.id),
         ]);
 
-        // اضافه کردن اطلاعات دسته‌بندی به هر تراکنش
+        // اضافه کردن اطلاعات دسته‌بندی به هر تراکنش (پیش‌فرض یا شخصی، هر دو)
         const enriched = transactions.map(tx => {
             const txObj = tx.toObject();
-            if (txObj.category) {
-                const cat = CATEGORIES.find(c => c.id === txObj.category);
-                txObj.categoryInfo = cat || null;
-            } else {
-                txObj.categoryInfo = null;
-            }
+            const info = lookupCategoryInfo(txObj.category, categoryMap);
+            txObj.categoryInfo = info ? { id: txObj.category, ...info } : null;
             return txObj;
         });
 
@@ -187,8 +204,7 @@ exports.calculateUserStats = async (userId) => {
     return computeFinanceSummary(userId);
 };
 
-// خلاصه‌ی مالی — هم برای نمودار دایره‌ای (ChartDonut) هم برای انتخاب‌گر ماه
-// (MonthSelector) استفاده می‌شه. اگه from/to بدی، فقط همون بازه؛ وگرنه کل تاریخچه.
+// خلاصه‌ی مالی
 exports.getFinanceStats = async (req, res) => {
     try {
         const { from, to } = req.query;
@@ -200,9 +216,6 @@ exports.getFinanceStats = async (req, res) => {
 };
 
 // نمودار دایره‌ای بر اساس دسته‌بندی
-// نکته‌ی مهم: درآمد (INCOME) اصلاً دسته‌بندی نمی‌گیره (طبق طراحی فرم ثبت تراکنش)،
-// پس وقتی type=INCOME خواسته میشه، به‌جای فیلتر روی category (که همیشه صفر
-// برمی‌گردوند)، جمع کل درآمدهای همون بازه رو مستقیم حساب می‌کنیم.
 exports.getCategoryStats = async (req, res) => {
     try {
         const userId = new mongoose.Types.ObjectId(req.user.id);
@@ -229,26 +242,29 @@ exports.getCategoryStats = async (req, res) => {
         const match = { userId, category: { $ne: null, $exists: true }, ...dateMatch };
         if (type) match.type = type;
 
-        const stats = await Transaction.aggregate([
-            { $match: match },
-            {
-                $group: {
-                    _id: '$category',
-                    totalAmount: { $sum: '$amount' },
-                    count: { $sum: 1 }
-                }
-            },
-            { $sort: { totalAmount: -1 } }
+        const [stats, categoryMap] = await Promise.all([
+            Transaction.aggregate([
+                { $match: match },
+                {
+                    $group: {
+                        _id: '$category',
+                        totalAmount: { $sum: '$amount' },
+                        count: { $sum: 1 }
+                    }
+                },
+                { $sort: { totalAmount: -1 } }
+            ]),
+            getUserCategoryMap(req.user.id),
         ]);
 
         const total = stats.reduce((sum, item) => sum + item.totalAmount, 0);
 
         const result = stats.map(item => {
-            const cat = CATEGORIES.find(c => c.id === item._id);
+            const info = lookupCategoryInfo(item._id, categoryMap) || FALLBACK_CATEGORY_INFO;
             return {
                 id: item._id,
-                label: cat ? cat.label : item._id,
-                icon: cat ? cat.icon : '📦',
+                label: info.label,
+                icon: info.icon,
                 totalAmount: item.totalAmount,
                 count: item.count,
                 percentage: total > 0 ? Math.round((item.totalAmount / total) * 100) : 0
@@ -261,10 +277,74 @@ exports.getCategoryStats = async (req, res) => {
     }
 };
 
-// لیست دسته‌بندی‌ها — فرانت ازش می‌خونه
+// لیست دسته‌بندی‌ها — فرانت ازش می‌خونه. حالا پیش‌فرض‌ها + دسته‌بندی‌های
+// شخصیِ همین کاربر رو با هم برمی‌گردونه (isCustom مشخص می‌کنه کدوم مال خودشه)
 exports.getCategories = async (req, res) => {
     try {
-        res.status(200).json({ categories: CATEGORIES });
+        const customCats = await Category.find({ userId: req.user.id }).lean();
+        const presets = CATEGORIES.map(c => ({ ...c, isCustom: false }));
+        const custom = customCats.map(c => ({ id: c.id, label: c.label, icon: c.icon, isCustom: true }));
+        res.status(200).json({ categories: [...presets, ...custom] });
+    } catch (error) {
+        res.status(500).json({ message: 'خطای سرور', error: error.message });
+    }
+};
+
+// ✅ ساخت دسته‌بندی شخصی جدید — مثلاً یک راننده «گازوئیل» رو برای خودش اضافه می‌کنه
+exports.addCustomCategory = async (req, res) => {
+    try {
+        const { label, icon } = req.body;
+        const trimmedLabel = String(label ?? '').trim();
+
+        if (!trimmedLabel) {
+            return res.status(400).json({ message: 'نام دسته‌بندی الزامی است' });
+        }
+        if (trimmedLabel.length > 30) {
+            return res.status(400).json({ message: 'نام دسته‌بندی خیلی طولانی است' });
+        }
+
+        const existingCount = await Category.countDocuments({ userId: req.user.id });
+        if (existingCount >= MAX_CUSTOM_CATEGORIES_PER_USER) {
+            return res.status(400).json({ message: `حداکثر ${MAX_CUSTOM_CATEGORIES_PER_USER} دسته‌بندی شخصی مجاز است` });
+        }
+
+        // جلوگیری از دسته‌بندی تکراری (بدون حساسیت به حروف بزرگ/کوچک)
+        const duplicate = await Category.findOne({
+            userId: req.user.id,
+            label: { $regex: `^${trimmedLabel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, $options: 'i' }
+        });
+        if (duplicate) {
+            return res.status(400).json({ message: 'این دسته‌بندی از قبل وجود دارد' });
+        }
+
+        const newCategory = await Category.create({
+            userId: req.user.id,
+            id: new mongoose.Types.ObjectId().toHexString(), // شناسه‌ی یکتا، مستقل از متن فارسی
+            label: trimmedLabel,
+            icon: icon && String(icon).trim() ? String(icon).trim() : '📦',
+        });
+
+        res.status(201).json({
+            message: 'دسته‌بندی با موفقیت ساخته شد',
+            category: { id: newCategory.id, label: newCategory.label, icon: newCategory.icon, isCustom: true }
+        });
+    } catch (error) {
+        res.status(500).json({ message: 'خطای سرور', error: error.message });
+    }
+};
+
+// ✅ حذف دسته‌بندی شخصی — تراکنش‌هایی که قبلاً با این دسته ثبت شدن دست‌نخورده
+// می‌مونن، فقط دیگه توی گزارش‌ها به‌جای اسمش «دسته‌بندی حذف‌شده» نشون داده میشه
+exports.deleteCustomCategory = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const deleted = await Category.findOneAndDelete({ id, userId: req.user.id });
+
+        if (!deleted) {
+            return res.status(404).json({ message: 'دسته‌بندی مورد نظر یافت نشد' });
+        }
+
+        res.status(200).json({ message: 'دسته‌بندی با موفقیت حذف شد' });
     } catch (error) {
         res.status(500).json({ message: 'خطای سرور', error: error.message });
     }
@@ -306,10 +386,12 @@ exports.updateTransaction = async (req, res) => {
         if (title !== undefined) updateFields.title = title;
         if (description !== undefined) updateFields.description = description;
         if (dueDate !== undefined) updateFields.dueDate = dueDate;
-        if (category !== undefined) updateFields.category = resolveCategoryId(category);
 
-        // اجازه‌ی ویرایش تاریخ تراکنش هم می‌دیم — مثلاً کاربر یه تراکنش قدیمی رو
-        // ثبت کرده ولی تاریخش رو اشتباه زده، بتونه بعداً درستش کنه
+        if (category !== undefined) {
+            const categoryMap = await getUserCategoryMap(req.user.id);
+            updateFields.category = resolveCategoryId(category, categoryMap);
+        }
+
         if (date !== undefined) {
             const parsedDate = new Date(date);
             if (isNaN(parsedDate.getTime())) {
@@ -420,7 +502,10 @@ exports.exportTransactionsCSV = async (req, res) => {
             ];
         }
 
-        const transactions = await Transaction.find(filter).sort({ date: -1 });
+        const [transactions, categoryMap] = await Promise.all([
+            Transaction.find(filter).sort({ date: -1 }),
+            getUserCategoryMap(req.user.id),
+        ]);
 
         const typeLabel = (type) => {
             const map = { INCOME: 'درآمد', EXPENSE: 'خرج', INSTALLMENT: 'قسط', LOAN: 'وام' };
@@ -428,9 +513,8 @@ exports.exportTransactionsCSV = async (req, res) => {
         };
 
         const categoryLabel = (catId) => {
-            if (!catId) return '-';
-            const cat = CATEGORIES.find(c => c.id === catId);
-            return cat ? `${cat.icon} ${cat.label}` : catId;
+            const info = lookupCategoryInfo(catId, categoryMap);
+            return info ? `${info.icon} ${info.label}` : '-';
         };
 
         const escape = (val) => `"${String(val ?? '').replace(/"/g, '""')}"`;
