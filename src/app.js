@@ -1,9 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
-const rateLimit = require('express-rate-limit');
 const xss = require('xss');
-
 const authRoutes = require('./routes/authRoutes');
 const financeRoutes = require('./routes/financeRoutes');
 const aiRoutes = require('./routes/aiRoutes');
@@ -18,17 +16,15 @@ connectDB();
 const app = express();
 
 app.use(helmet());
-
 app.use(cors({
   origin: '*',
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
   allowedHeaders: ['Content-Type', 'Authorization'],
 }));
-
 app.use(express.json({ limit: '10kb' }));
 app.use(express.urlencoded({ extended: true, limit: '10kb' }));
 
-// جلوگیری از NoSQL Injection - سازگار با Express 5
+// جلوگیری از NoSQL Injection
 app.use((req, res, next) => {
   const sanitizeObject = (obj) => {
     if (obj && typeof obj === 'object') {
@@ -59,24 +55,6 @@ app.use((req, res, next) => {
   if (req.body) req.body = sanitizeValue(req.body);
   next();
 });
-
-const globalLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 100,
-  message: { error: 'Too many requests, please try again later.' },
-  standardHeaders: true,
-  legacyHeaders: false,
-});
-
-const authLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 10,
-  message: { error: 'Too many login attempts, please try again later.' },
-  standardHeaders: true,
-  legacyHeaders: false,
-});
-
-app.use(globalLimiter);
 
 app.use('/api/auth', authRoutes);
 app.use('/api/finance', financeRoutes);
