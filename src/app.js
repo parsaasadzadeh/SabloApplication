@@ -78,7 +78,7 @@ const authLimiter = rateLimit({
 
 app.use(globalLimiter);
 
-app.use('/api/auth', authLimiter, authRoutes);
+app.use('/api/auth', authRoutes);
 app.use('/api/finance', financeRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/cron', cronRoutes);
