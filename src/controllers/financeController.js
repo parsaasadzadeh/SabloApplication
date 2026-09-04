@@ -321,7 +321,7 @@ exports.addCustomCategory = async (req, res) => {
             userId: req.user.id,
             id: new mongoose.Types.ObjectId().toHexString(), // شناسه‌ی یکتا، مستقل از متن فارسی
             label: trimmedLabel,
-            icon: icon && String(icon).trim() ? String(icon).trim() : '📦',
+            icon: icon && String(icon).trim() ? String(icon).trim() : '',
         });
 
         res.status(201).json({
