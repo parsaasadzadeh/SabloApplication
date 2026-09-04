@@ -9,7 +9,7 @@ const categorySchema = new mongoose.Schema({
     // و هیچ‌وقت با id های پیش‌فرض (food, coffee, ...) تداخل نکنه
     id: { type: String, required: true, unique: true },
     label: { type: String, required: true, trim: true, maxlength: 30 },
-    icon: { type: String, default: '📦', trim: true },
+   icon: { type: String, default: '', trim: true }
 }, { timestamps: true });
 
 // سرچ سریع «همه‌ی دسته‌بندی‌های این کاربر»
