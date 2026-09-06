@@ -618,3 +618,198 @@ exports.getMonthlyOverview = async (req, res) => {
         res.status(500).json({ message: 'خطای سرور', error: error.message });
     }
 };
+
+
+
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// این دو تابع رو به انتهای financeController.js اضافه کن
+// و دو route رو هم به financeRoutes.js اضافه کن (در پایین فایل توضیح دادم)
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ساخت وام + اقساط خودکار
+// کاربر یه‌بار وام رو ثبت می‌کنه، سیستم همه اقساط رو با تاریخ سررسید دقیق می‌سازه
+// تاریخ‌ها دست‌نخورده‌ن — همون firstDueDate که کاربر میده رو ماه به ماه جلو می‌بریم
+exports.createLoanWithInstallments = async (req, res) => {
+    try {
+        const {
+            title,             // نام وام — مثلاً «وام بانک ملت»
+            totalAmount,       // مبلغ کل وام (ریال)
+            installmentCount,  // تعداد اقساط
+            installmentAmount, // مبلغ هر قسط (ریال)
+            firstDueDate,      // تاریخ سررسید اولین قسط (ISO string)
+            description,
+        } = req.body;
+
+        // ── اعتبارسنجی ────────────────────────────────────────────────────────
+        if (!title || !title.trim()) {
+            return res.status(400).json({ message: 'نام وام الزامی است' });
+        }
+        if (!totalAmount || totalAmount <= 0) {
+            return res.status(400).json({ message: 'مبلغ کل وام باید بیشتر از صفر باشد' });
+        }
+        if (!installmentCount || installmentCount < 1 || installmentCount > 360) {
+            return res.status(400).json({ message: 'تعداد اقساط باید بین ۱ تا ۳۶۰ باشد' });
+        }
+        if (!installmentAmount || installmentAmount <= 0) {
+            return res.status(400).json({ message: 'مبلغ هر قسط باید بیشتر از صفر باشد' });
+        }
+        if (!firstDueDate) {
+            return res.status(400).json({ message: 'تاریخ اولین قسط الزامی است' });
+        }
+
+        const parsedFirstDue = new Date(firstDueDate);
+        if (isNaN(parsedFirstDue.getTime())) {
+            return res.status(400).json({ message: 'تاریخ اولین قسط نامعتبر است' });
+        }
+
+        // ── ساخت تراکنش LOAN (وام مادر) ──────────────────────────────────────
+        // date = همین لحظه (کاربر وام رو امروز گرفته)
+        // dueDate = تاریخ آخرین قسط — برای SMS یادآوری موجود
+        const lastDueDate = new Date(parsedFirstDue);
+        lastDueDate.setMonth(lastDueDate.getMonth() + (installmentCount - 1));
+
+        const loanTx = await Transaction.create({
+            userId:      req.user.id,
+            type:        'LOAN',
+            amount:      totalAmount,
+            title:       title.trim(),
+            description: description?.trim() || '',
+            date:        new Date(),       // تاریخ دریافت وام = امروز
+            dueDate:     lastDueDate,      // تاریخ آخرین قسط — برای SMS
+            isPaid:      true,             // وام مادر همیشه «پرداخت‌شده» حساب میشه
+            loanId:      null,
+            category:    null,
+        });
+
+        // ── ساخت اقساط خودکار ─────────────────────────────────────────────────
+        // هر قسط یه ماه از قسط قبلی جلوتره
+        // تاریخ‌ها دست‌نخورده‌ن — SMS سیستم از همین dueDate می‌خونه
+        const installments = [];
+        for (let i = 0; i < installmentCount; i++) {
+            const dueDate = new Date(parsedFirstDue);
+            dueDate.setMonth(dueDate.getMonth() + i);
+
+            installments.push({
+                userId:      req.user.id,
+                type:        'INSTALLMENT',
+                amount:      installmentAmount,
+                title:       `${title.trim()} — قسط ${i + 1} از ${installmentCount}`,
+                description: '',
+                date:        new Date(),   // date = امروز (تاریخ ثبت)
+                dueDate:     dueDate,      // dueDate = تاریخ سررسید این قسط ← SMS از اینجا میخونه
+                isPaid:      false,
+                loanId:      loanTx._id,   // وصل به وام مادر
+                category:    null,
+            });
+        }
+
+        await Transaction.insertMany(installments);
+
+        res.status(201).json({
+            message: `وام با ${installmentCount} قسط با موفقیت ثبت شد`,
+            loan: {
+                _id:              loanTx._id,
+                title:            loanTx.title,
+                totalAmount,
+                installmentCount,
+                installmentAmount,
+                firstDueDate:     parsedFirstDue,
+                lastDueDate,
+            },
+        });
+    } catch (error) {
+        res.status(500).json({ message: 'خطای سرور', error: error.message });
+    }
+};
+
+// لیست وام‌ها با اقساط هر کدوم
+// برای صفحه /loans فرانت — هر وام رو با progress و قسط بعدی برمی‌گردونه
+exports.getLoans = async (req, res) => {
+    try {
+        const userId = req.user.id;
+
+        // همه وام‌های این کاربر
+        const loans = await Transaction.find({
+            userId,
+            type: 'LOAN',
+        }).sort({ date: -1 }).lean();
+
+        if (loans.length === 0) {
+            return res.status(200).json({ loans: [] });
+        }
+
+        const loanIds = loans.map(l => l._id);
+
+        // همه اقساط این وام‌ها با یه query
+        const allInstallments = await Transaction.find({
+            userId,
+            type:   'INSTALLMENT',
+            loanId: { $in: loanIds },
+        }).sort({ dueDate: 1 }).lean();
+
+        // گروه‌بندی اقساط بر اساس loanId
+        const installmentsByLoan = {};
+        allInstallments.forEach(inst => {
+            const key = inst.loanId.toString();
+            if (!installmentsByLoan[key]) installmentsByLoan[key] = [];
+            installmentsByLoan[key].push(inst);
+        });
+
+        // ساخت response نهایی
+        const result = loans.map(loan => {
+            const insts     = installmentsByLoan[loan._id.toString()] || [];
+            const total     = insts.length;
+            const paid      = insts.filter(i => i.isPaid).length;
+            const unpaid    = insts.filter(i => !i.isPaid);
+            const nextInst  = unpaid[0] || null; // اولین قسط پرداخت‌نشده = قسط بعدی
+
+            const paidAmount   = paid * (insts[0]?.amount || 0);
+            const totalAmount  = total * (insts[0]?.amount || 0);
+
+            return {
+                _id:              loan._id,
+                title:            loan.title,
+                description:      loan.description,
+                date:             loan.date,
+                totalLoanAmount:  loan.amount,       // مبلغ کل وام
+                totalAmount,                          // مجموع مبالغ اقساط
+                paidAmount,                           // مجموع اقساط پرداخت‌شده
+                remainingAmount:  totalAmount - paidAmount,
+                installmentCount: total,
+                paidCount:        paid,
+                unpaidCount:      unpaid.length,
+                progressPercent:  total > 0 ? Math.round((paid / total) * 100) : 0,
+                isFullyPaid:      total > 0 && paid === total,
+                nextInstallment:  nextInst ? {
+                    _id:     nextInst._id,
+                    amount:  nextInst.amount,
+                    dueDate: nextInst.dueDate,
+                    title:   nextInst.title,
+                } : null,
+                installments: insts.map(inst => ({
+                    _id:     inst._id,
+                    title:   inst.title,
+                    amount:  inst.amount,
+                    dueDate: inst.dueDate,
+                    isPaid:  inst.isPaid,
+                    date:    inst.date,
+                })),
+            };
+        });
+
+        res.status(200).json({ loans: result });
+    } catch (error) {
+        res.status(500).json({ message: 'خطای سرور', error: error.message });
+    }
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// این دو خط رو به financeRoutes.js اضافه کن (قبل از module.exports):
+//
+// const { ..., createLoanWithInstallments, getLoans } = require('../controllers/financeController');
+//
+// router.post('/loans/create', createLoanWithInstallments);
+// router.get('/loans', getLoans);
+// ─────────────────────────────────────────────────────────────────────────────
