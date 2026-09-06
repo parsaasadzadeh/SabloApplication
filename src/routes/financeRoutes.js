@@ -13,7 +13,9 @@ const {
     getCategories,
     addCustomCategory,
     deleteCustomCategory,
-    getMonthlyOverview
+    getMonthlyOverview,
+    createLoanWithInstallments,
+    getLoans
 } = require('../controllers/financeController');
 const { protect } = require('../middlewares/authMiddleware');
 router.use(protect);
@@ -31,4 +33,8 @@ router.post('/categories/custom', addCustomCategory);
 router.delete('/categories/custom/:id', deleteCustomCategory);
 router.get('/category-stats', getCategoryStats);
 router.get('/monthly-overview', getMonthlyOverview);
+
+//قسط و وام 
+router.post('/loans/create', createLoanWithInstallments);
+router.get('/loans', getLoans);
 module.exports = router;
