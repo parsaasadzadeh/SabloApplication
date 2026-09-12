@@ -1,6 +1,10 @@
 const express = require('express');
 const router = express.Router();
-const { checkInstallments } = require('../utils/checkInstallments');
+const {
+    checkInstallments,
+    checkInstallmentsOneDayBefore,
+    checkInstallmentsTwoDaysBefore
+} = require('../utils/checkInstallments');
 
 router.get('/check-installments', async (req, res) => {
     const authHeader = req.headers['authorization'];
@@ -10,7 +14,15 @@ router.get('/check-installments', async (req, res) => {
 
     try {
         const result = await checkInstallments();
-        res.status(200).json({ message: 'بررسی انجام شد', ...result });
+        const result1Day = await checkInstallmentsOneDayBefore();
+        const result2Days = await checkInstallmentsTwoDaysBefore();
+
+        res.status(200).json({
+            message: 'بررسی انجام شد',
+            dueToday: result,
+            oneDayBefore: result1Day,
+            twoDaysBefore: result2Days
+        });
     } catch (error) {
         res.status(500).json({ message: 'خطای سرور', error: error.message });
     }
