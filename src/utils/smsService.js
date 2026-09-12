@@ -166,4 +166,4 @@ async function sendInstallmentReminderTwoDaysBefore(mobile, installmentTitle) {
     }
 }
 
-module.exports = { sendOtp, sendInstallmentReminder };
+module.exports = { sendOtp, sendInstallmentReminder , sendInstallmentReminderOneDayBefore,sendInstallmentReminderTwoDaysBefore };
