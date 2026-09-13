@@ -23,11 +23,11 @@ const notificationSchema = new mongoose.Schema({
         ref: 'Transaction',
         default: null
     },
-    reminderType: {
-        type: String,
-        enum: ['DUE_DATE'],
-        default: null,
-    },
+reminderType: {
+    type: String,
+    enum: ['DUE_DATE', 'DUE_DATE_1DAY', 'DUE_DATE_2DAYS'],
+    default: null,
+},
     createdAt: {
         type: Date,
         default: Date.now
