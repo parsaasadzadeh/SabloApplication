@@ -146,46 +146,63 @@ exports.deleteCard = async (req, res) => {
     }
 };
 // خلاصه مالی یه کارت خاص
+// خلاصه مالی یه کارت خاص
 exports.getCardStats = async (req, res) => {
     try {
         const { id } = req.params;
         const mongoose = require('mongoose');
 
-        // چک که کارت متعلق به این کاربر باشه
         const card = await Card.findOne({ _id: id, userId: req.user.id });
         if (!card) {
             return res.status(404).json({ message: 'کارت مورد نظر یافت نشد' });
         }
 
-        const stats = await Transaction.aggregate([
-            {
-                $match: {
-                    userId: new mongoose.Types.ObjectId(req.user.id),
-                    cardId: card._id
+        const userIdObj = new mongoose.Types.ObjectId(req.user.id);
+
+        const [stats, unpaidAgg] = await Promise.all([
+            Transaction.aggregate([
+                { $match: { userId: userIdObj, cardId: card._id } },
+                {
+                    $group: {
+                        _id: '$type',
+                        totalAmount: {
+                            $sum: {
+                                $cond: [
+                                    { $eq: ['$type', 'INSTALLMENT'] },
+                                    { $cond: ['$isPaid', '$amount', 0] },
+                                    '$amount'
+                                ]
+                            }
+                        },
+                        count: { $sum: 1 }
+                    }
                 }
-            },
-            {
-                $group: {
-                    _id: '$type',
-                    totalAmount: { $sum: '$amount' },
-                    count: { $sum: 1 }
-                }
-            }
+            ]),
+            Transaction.aggregate([
+                { $match: { userId: userIdObj, cardId: card._id, type: 'INSTALLMENT', isPaid: false } },
+                { $group: { _id: null, totalRemaining: { $sum: '$amount' }, count: { $sum: 1 } } }
+            ])
         ]);
 
-        let income = 0, expense = 0, transactionCount = 0;
+        let income = 0, expense = 0, loans = 0, installmentsPaid = 0, transactionCount = 0;
         stats.forEach(item => {
             if (item._id === 'INCOME') income = item.totalAmount;
             if (item._id === 'EXPENSE') expense = item.totalAmount;
+            if (item._id === 'LOAN') loans = item.totalAmount;
+            if (item._id === 'INSTALLMENT') installmentsPaid = item.totalAmount;
             transactionCount += item.count;
         });
+
+        const unpaid = unpaidAgg[0] || { totalRemaining: 0, count: 0 };
 
         res.status(200).json({
             card,
             stats: {
                 totalIncome: income,
                 totalExpense: expense,
-                balance: income - expense,
+                balance: (income + loans) - (expense + installmentsPaid),
+                unpaidInstallmentsCount: unpaid.count,
+                unpaidInstallmentsAmount: unpaid.totalRemaining,
                 transactionCount
             }
         });
