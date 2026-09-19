@@ -415,26 +415,11 @@ exports.payInstallment = async (req, res) => {
         const installmentId = req.params.id;
         const { cardId } = req.body;
 
-        const installment = await Transaction.findOne({
-            _id: installmentId,
-            userId: req.user.id,
-            type: 'INSTALLMENT'
-        });
-
-        if (!installment) {
-            return res.status(404).json({ message: 'قسط مورد نظر یافت نشد' });
-        }
-
-        if (installment.isPaid) {
-            return res.status(400).json({ message: 'این قسط قبلاً پرداخت شده است' });
-        }
-
         const updateFields = { isPaid: true, date: Date.now() };
 
-        // اگه کاربر کارتی انتخاب کرده باشه، همین الان (لحظه پرداخت) روی قسط ست میشه
         if (cardId !== undefined) {
             if (cardId === null) {
-                updateFields.cardId = null; // یعنی بدون کارت — از کل حساب کم میشه
+                updateFields.cardId = null;
             } else {
                 try {
                     updateFields.cardId = await resolveCardId(cardId, req.user.id);
@@ -443,13 +428,22 @@ exports.payInstallment = async (req, res) => {
                 }
             }
         }
-        // اگه cardId اصلاً تو body نیاد، cardId قبلی قسط (همون که موقع ساخت وام گذاشته شده) دست‌نخورده می‌مونه
 
+        // ✅ شرط isPaid:false مستقیم تو همین کوئری — این atomic بودنشه
         const updatedInstallment = await Transaction.findOneAndUpdate(
-            { _id: installmentId, userId: req.user.id, type: 'INSTALLMENT' },
+            { _id: installmentId, userId: req.user.id, type: 'INSTALLMENT', isPaid: false },
             updateFields,
             { new: true }
         );
+
+        // اگه چیزی برنگشت، یا اصلاً وجود نداره یا قبلاً پرداخت شده — این یکی رو جدا چک می‌کنیم فقط برای پیام درست
+        if (!updatedInstallment) {
+            const exists = await Transaction.findOne({ _id: installmentId, userId: req.user.id, type: 'INSTALLMENT' });
+            if (!exists) {
+                return res.status(404).json({ message: 'قسط مورد نظر یافت نشد' });
+            }
+            return res.status(400).json({ message: 'این قسط قبلاً پرداخت شده است' });
+        }
 
         res.status(200).json({ message: 'قسط با موفقیت پرداخت شد', installment: updatedInstallment });
     } catch (error) {
