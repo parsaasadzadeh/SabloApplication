@@ -22,7 +22,11 @@ const transactionSchema = new mongoose.Schema({
     },
 
     loanId: { type: mongoose.Schema.Types.ObjectId, ref: 'Transaction', default: null },
-    
+    cardId: { 
+    type: mongoose.Schema.Types.ObjectId, 
+    ref: 'Card', 
+    default: null 
+},
     dueDate: { type: Date }, // تاریخ سررسید قسط یا یادآوری وام
     isPaid: { type: Boolean, default: false }, //وضعیت پرداخت (مخصوص اقساط)
     
