@@ -205,6 +205,9 @@ exports.getMyTransactions = async (req, res) => {
                 { description: { $regex: search, $options: 'i' } },
             ];
         }
+        if (req.query.type) {
+  filter.type = req.query.type;
+}
 
         const [transactions, totalTransactions, categoryMap] = await Promise.all([
             Transaction.find(filter).sort({ date: -1 }).skip(skip).limit(limit),
