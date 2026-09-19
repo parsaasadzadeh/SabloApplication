@@ -410,27 +410,52 @@ exports.deleteCustomCategory = async (req, res) => {
 // ---------------------------------------------------------------------
 // پرداخت قسط
 // ---------------------------------------------------------------------
-
 exports.payInstallment = async (req, res) => {
     try {
         const installmentId = req.params.id;
+        const { cardId } = req.body;
+
+        const installment = await Transaction.findOne({
+            _id: installmentId,
+            userId: req.user.id,
+            type: 'INSTALLMENT'
+        });
+
+        if (!installment) {
+            return res.status(404).json({ message: 'قسط مورد نظر یافت نشد' });
+        }
+
+        if (installment.isPaid) {
+            return res.status(400).json({ message: 'این قسط قبلاً پرداخت شده است' });
+        }
+
+        const updateFields = { isPaid: true, date: Date.now() };
+
+        // اگه کاربر کارتی انتخاب کرده باشه، همین الان (لحظه پرداخت) روی قسط ست میشه
+        if (cardId !== undefined) {
+            if (cardId === null) {
+                updateFields.cardId = null; // یعنی بدون کارت — از کل حساب کم میشه
+            } else {
+                try {
+                    updateFields.cardId = await resolveCardId(cardId, req.user.id);
+                } catch {
+                    return res.status(400).json({ message: 'کارت انتخاب‌شده معتبر نیست' });
+                }
+            }
+        }
+        // اگه cardId اصلاً تو body نیاد، cardId قبلی قسط (همون که موقع ساخت وام گذاشته شده) دست‌نخورده می‌مونه
 
         const updatedInstallment = await Transaction.findOneAndUpdate(
             { _id: installmentId, userId: req.user.id, type: 'INSTALLMENT' },
-            { isPaid: true, date: Date.now() },
+            updateFields,
             { new: true }
         );
-
-        if (!updatedInstallment) {
-            return res.status(404).json({ message: 'قسط مورد نظر یافت نشد' });
-        }
 
         res.status(200).json({ message: 'قسط با موفقیت پرداخت شد', installment: updatedInstallment });
     } catch (error) {
         res.status(500).json({ message: 'خطای سرور', error: error.message });
     }
 };
-
 // ---------------------------------------------------------------------
 // ویرایش تراکنش — cardId اضافه شد
 // ---------------------------------------------------------------------
