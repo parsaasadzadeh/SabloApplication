@@ -109,32 +109,42 @@ exports.updateCard = async (req, res) => {
 };
 
 // حذف کارت + تراکنش‌های مربوط بهش
+// cardController.js - deleteCard
 exports.deleteCard = async (req, res) => {
     try {
         const { id } = req.params;
+        const deleteTransactions = req.query.deleteTransactions === 'true';
 
         const card = await Card.findOne({ _id: id, userId: req.user.id });
         if (!card) {
             return res.status(404).json({ message: 'کارت مورد نظر یافت نشد' });
         }
 
-        // حذف همه تراکنش‌های این کارت
-        const deleteResult = await Transaction.deleteMany({ 
-            cardId: card._id, 
-            userId: req.user.id 
-        });
+        if (deleteTransactions) {
+            // کاربر خواست تراکنش‌ها هم پاک بشن
+            await Transaction.deleteMany({ 
+                cardId: card._id, 
+                userId: req.user.id 
+            });
+        } else {
+            // فقط cardId رو null کن، تراکنش‌ها بمونن
+            await Transaction.updateMany(
+                { cardId: card._id, userId: req.user.id },
+                { $set: { cardId: null } }
+            );
+        }
 
         await Card.deleteOne({ _id: id });
 
         res.status(200).json({ 
-            message: 'کارت و تراکنش‌های مربوطه با موفقیت حذف شدند',
-            deletedTransactionsCount: deleteResult.deletedCount
+            message: deleteTransactions 
+                ? 'کارت و تراکنش‌های مربوطه حذف شدند'
+                : 'کارت حذف شد و تراکنش‌ها حفظ شدند'
         });
     } catch (error) {
         res.status(500).json({ message: 'خطای سرور', error: error.message });
     }
 };
-
 // خلاصه مالی یه کارت خاص
 exports.getCardStats = async (req, res) => {
     try {
