@@ -1,7 +1,7 @@
 // controllers/cardController.js
 const Card = require('../models/Card');
 const Transaction = require('../models/Transaction');
-
+const ActivityLog = require('../models/ActivityLog');
 const MAX_CARDS_PER_USER = 5;
 
 // لیست کارت‌های کاربر
@@ -110,6 +110,7 @@ exports.updateCard = async (req, res) => {
 
 // حذف کارت + تراکنش‌های مربوط بهش
 // cardController.js - deleteCard
+
 exports.deleteCard = async (req, res) => {
     try {
         const { id } = req.params;
@@ -120,24 +121,35 @@ exports.deleteCard = async (req, res) => {
             return res.status(404).json({ message: 'کارت مورد نظر یافت نشد' });
         }
 
+        const affected = await Transaction.find({ cardId: card._id, userId: req.user.id }).select('_id').lean();
+
         if (deleteTransactions) {
-            // کاربر خواست تراکنش‌ها هم پاک بشن
-            await Transaction.deleteMany({ 
-                cardId: card._id, 
-                userId: req.user.id 
+            await Transaction.deleteMany({ cardId: card._id, userId: req.user.id });
+            await ActivityLog.create({
+                userId: req.user.id,
+                action: 'CARD_DELETED_WITH_TRANSACTIONS',
+                entityType: 'Card',
+                entityId: card._id,
+                meta: { cardName: card.name, deletedTransactionIds: affected.map(t => t._id), count: affected.length }
             });
         } else {
-            // فقط cardId رو null کن، تراکنش‌ها بمونن
             await Transaction.updateMany(
                 { cardId: card._id, userId: req.user.id },
                 { $set: { cardId: null } }
             );
+            await ActivityLog.create({
+                userId: req.user.id,
+                action: 'CARD_DELETED_TRANSACTIONS_UNLINKED',
+                entityType: 'Card',
+                entityId: card._id,
+                meta: { cardName: card.name, unlinkedTransactionIds: affected.map(t => t._id), count: affected.length }
+            });
         }
 
         await Card.deleteOne({ _id: id });
 
-        res.status(200).json({ 
-            message: deleteTransactions 
+        res.status(200).json({
+            message: deleteTransactions
                 ? 'کارت و تراکنش‌های مربوطه حذف شدند'
                 : 'کارت حذف شد و تراکنش‌ها حفظ شدند'
         });
