@@ -1,4 +1,4 @@
- const Transaction = require('../models/Transaction');
+const Transaction = require('../models/Transaction');
 const Category = require('../models/Category');
 const Card = require('../models/Card');
 const mongoose = require('mongoose');
@@ -80,7 +80,8 @@ const computeFinanceSummary = async (userId, from, to, cardId = null) => {
     return {
         totalIncome: income,
         totalExpense: expense,
-        activeDebt: loans - installmentsPaid,
+        // ✅ فیکس باگ: activeDebt = مجموع اقساط پرداخت‌نشده (چه وام‌دار چه شخصی)
+        activeDebt: unpaid.totalRemaining,
         cashBalance: (income + loans) - (expense + installmentsPaid),
         unpaidInstallmentsCount: unpaid.count,
         unpaidInstallmentsAmount: unpaid.totalRemaining
@@ -192,7 +193,6 @@ exports.getMyTransactions = async (req, res) => {
 
         const filter = { userId: req.user.id, ...buildDateMatch(fromDate, toDate) };
 
-        // فیلتر کارت: 'none' = تراکنش‌های بدون کارت، وگرنه cardId مشخص
         if (req.query.cardId === 'none') {
             filter.cardId = null;
         } else if (req.query.cardId) {
@@ -464,7 +464,6 @@ exports.updateTransaction = async (req, res) => {
             updateFields.date = parsedDate;
         }
 
-        // cardId: null یعنی کارت رو بردار، یه id یعنی تغییر بده
         if (cardId !== undefined) {
             if (cardId === null) {
                 updateFields.cardId = null;
@@ -596,7 +595,6 @@ exports.exportTransactionsCSV = async (req, res) => {
             Card.find({ userId: req.user.id }).lean(),
         ]);
 
-        // Map کارت‌ها برای lookup سریع
         const cardMap = new Map();
         cards.forEach(c => cardMap.set(c._id.toString(), c.name));
 
@@ -736,7 +734,7 @@ exports.createLoanWithInstallments = async (req, res) => {
             installmentAmount,
             firstDueDate,
             description,
-            cardId,           // ← جدید: وام و اقساطش به یه کارت وصل بشن
+            cardId,
         } = req.body;
 
         if (!title || !title.trim()) {
@@ -760,7 +758,6 @@ exports.createLoanWithInstallments = async (req, res) => {
             return res.status(400).json({ message: 'تاریخ اولین قسط نامعتبر است' });
         }
 
-        // اعتبارسنجی کارت
         let resolvedCardId = null;
         try {
             resolvedCardId = await resolveCardId(cardId, req.user.id);
@@ -855,7 +852,6 @@ exports.getLoans = async (req, res) => {
             installmentsByLoan[key].push(inst);
         });
 
-        // کارت‌ها برای نمایش اسم
         const cards = await Card.find({ userId }).lean();
         const cardMap = new Map();
         cards.forEach(c => cardMap.set(c._id.toString(), { name: c.name, icon: c.icon, color: c.color }));
@@ -878,7 +874,7 @@ exports.getLoans = async (req, res) => {
                 description:      loan.description,
                 date:             loan.date,
                 cardId:           loan.cardId,
-                cardInfo,                           // ← name/icon/color کارت
+                cardInfo,
                 totalLoanAmount:  loan.amount,
                 totalAmount,
                 paidAmount,
