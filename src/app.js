@@ -8,6 +8,7 @@ const notificationRoutes = require('./routes/notificationRoutes');
 const versionRoutes = require('./routes/version.routes');
 const cronRoutes = require('./routes/cronRoutes');
 const goalRoutes = require('./routes/goalRoutes');
+const cardRoutes = require('./routes/cardRoutes');
 const connectDB = require('./config/db');
 
 connectDB();
@@ -68,7 +69,7 @@ app.use('/api/cron', cronRoutes);
 app.use('/api/ai', aiRoutes);
 app.use('/api/version', versionRoutes);
 app.use('/api/goals', goalRoutes);
-
+app.use('/api/cards', cardRoutes);
 app.use((err, req, res, next) => {
   console.error(err.stack);
   res.status(err.status || 500).json({ error: 'Internal Server Error' });
