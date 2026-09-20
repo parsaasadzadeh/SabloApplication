@@ -1,6 +1,5 @@
 const Transaction = require('../models/Transaction');
 const Notification = require('../models/Notification');
-const { sendInstallmentReminder, sendInstallmentReminderOneDayBefore, sendInstallmentReminderTwoDaysBefore } = require('./smsService');
 
 const REMINDER_TYPE = 'DUE_DATE';
 
@@ -22,7 +21,7 @@ function getTodayRangeUTC() {
 }
 
 async function checkInstallments() {
-    const result = { checked: 0, notifCreated: 0, smsSent: 0, smsFailed: 0 };
+    const result = { checked: 0, notifCreated: 0 };
     const { start, end } = getTodayRangeUTC();
 
     console.log(`📅 بازه جستجو [${REMINDER_TYPE}] (UTC):`, start.toISOString(), '←→', end.toISOString());
@@ -31,7 +30,7 @@ async function checkInstallments() {
         type: 'INSTALLMENT',
         isPaid: false,
         dueDate: { $gte: start, $lte: end },
-    }).populate('userId', 'phone name');
+    }).populate('userId', 'name');
 
     console.log(`🔍 تعداد اقساط [${REMINDER_TYPE}]: ${installments.length}`);
 
@@ -47,7 +46,7 @@ async function checkInstallments() {
         const notifTitle = 'امروز موعد پرداخت قسط شماست ⏰';
         const notifMessage = `کاربر عزیز، امروز موعد پرداخت قسط «${installment.title}» به مبلغ ${installment.amount.toLocaleString()} تومان است.`;
 
-        // --- ۱. نوتیف داخل اپ ---
+        // نوتیف داخل اپ
         try {
             await Notification.create({
                 userId: user._id,
@@ -65,27 +64,13 @@ async function checkInstallments() {
                 console.log(`ℹ️ نوتیف [${REMINDER_TYPE}] قبلاً ثبت شده بود، skip شد.`);
             }
         }
-
-        // --- ۲. ارسال SMS ---
-        if (user.phone) {
-            const smsResult = await sendInstallmentReminder(user.phone, installment.title);
-            if (smsResult.success) {
-                result.smsSent++;
-                console.log(`📱 SMS [${REMINDER_TYPE}] رفت به ${user.phone}`);
-            } else {
-                result.smsFailed++;
-                console.warn(`⚠️ SMS [${REMINDER_TYPE}] نرفت به ${user.phone}: ${smsResult.error}`);
-            }
-        } else {
-            console.warn(`⚠️ کاربر ${user._id} شماره نداره، SMS ارسال نشد.`);
-        }
     }
 
     return result;
 }
 
 // ============================================
-// از این‌جا به بعد بخش جدیده (یک روز و دو روز قبل)
+// یک روز و دو روز قبل
 // ============================================
 
 function getOffsetDayRangeUTC(offsetDays) {
@@ -105,8 +90,8 @@ function getOffsetDayRangeUTC(offsetDays) {
     return { start, end };
 }
 
-async function checkInstallmentsByOffset(offsetDays, reminderType, notifTitle, buildMessage, sendSmsFn) {
-    const result = { checked: 0, notifCreated: 0, smsSent: 0, smsFailed: 0 };
+async function checkInstallmentsByOffset(offsetDays, reminderType, notifTitle, buildMessage) {
+    const result = { checked: 0, notifCreated: 0 };
     const { start, end } = getOffsetDayRangeUTC(offsetDays);
 
     console.log(`📅 بازه جستجو [${reminderType}] (UTC):`, start.toISOString(), '←→', end.toISOString());
@@ -115,7 +100,7 @@ async function checkInstallmentsByOffset(offsetDays, reminderType, notifTitle, b
         type: 'INSTALLMENT',
         isPaid: false,
         dueDate: { $gte: start, $lte: end },
-    }).populate('userId', 'phone name');
+    }).populate('userId', 'name');
 
     console.log(`🔍 تعداد اقساط [${reminderType}]: ${installments.length}`);
 
@@ -130,7 +115,7 @@ async function checkInstallmentsByOffset(offsetDays, reminderType, notifTitle, b
 
         const notifMessage = buildMessage(installment);
 
-        // --- ۱. نوتیف داخل اپ ---
+        // نوتیف داخل اپ
         try {
             await Notification.create({
                 userId: user._id,
@@ -148,20 +133,6 @@ async function checkInstallmentsByOffset(offsetDays, reminderType, notifTitle, b
                 console.log(`ℹ️ نوتیف [${reminderType}] قبلاً ثبت شده بود، skip شد.`);
             }
         }
-
-        // --- ۲. ارسال SMS ---
-        if (user.phone) {
-            const smsResult = await sendSmsFn(user.phone, installment.title);
-            if (smsResult.success) {
-                result.smsSent++;
-                console.log(`📱 SMS [${reminderType}] رفت به ${user.phone}`);
-            } else {
-                result.smsFailed++;
-                console.warn(`⚠️ SMS [${reminderType}] نرفت به ${user.phone}: ${smsResult.error}`);
-            }
-        } else {
-            console.warn(`⚠️ کاربر ${user._id} شماره نداره، SMS ارسال نشد.`);
-        }
     }
 
     return result;
@@ -172,8 +143,7 @@ async function checkInstallmentsOneDayBefore() {
         1,
         'DUE_DATE_1DAY',
         'فردا موعد پرداخت قسط شماست ⏰',
-        (installment) => `کاربر عزیز، فردا موعد پرداخت قسط «${installment.title}» به مبلغ ${installment.amount.toLocaleString()} تومان است.`,
-        sendInstallmentReminderOneDayBefore
+        (installment) => `کاربر عزیز، فردا موعد پرداخت قسط «${installment.title}» به مبلغ ${installment.amount.toLocaleString()} تومان است.`
     );
 }
 
@@ -182,8 +152,7 @@ async function checkInstallmentsTwoDaysBefore() {
         2,
         'DUE_DATE_2DAYS',
         '۲ روز دیگر موعد پرداخت قسط شماست ⏰',
-        (installment) => `کاربر عزیز، ۲ روز دیگر موعد پرداخت قسط «${installment.title}» به مبلغ ${installment.amount.toLocaleString()} تومان است.`,
-        sendInstallmentReminderTwoDaysBefore
+        (installment) => `کاربر عزیز، ۲ روز دیگر موعد پرداخت قسط «${installment.title}» به مبلغ ${installment.amount.toLocaleString()} تومان است.`
     );
 }
 
