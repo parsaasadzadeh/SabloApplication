@@ -928,3 +928,24 @@ exports.getLoans = async (req, res) => {
         res.status(500).json({ message: 'خطای سرور', error: error.message });
     }
 };
+exports.getUnpaidInstallments = async (req, res) => {
+    try {
+        const since = new Date();
+        since.setDate(since.getDate() - 1);
+
+        const installments = await Transaction.find({
+            userId: req.user.id,
+            type: 'INSTALLMENT',
+            isPaid: false,
+            dueDate: { $gte: since },
+        })
+            .select('title amount dueDate loanId')
+            .sort({ dueDate: 1 })
+            .limit(200)
+            .lean();
+
+        res.status(200).json({ installments });
+    } catch (error) {
+        res.status(500).json({ message: 'خطای سرور', error: error.message });
+    }
+};
