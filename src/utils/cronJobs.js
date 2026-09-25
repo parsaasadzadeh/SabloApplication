@@ -1,22 +1,29 @@
 const cron = require('node-cron');
-const { checkInstallments, checkInstallmentsOneDayBefore, checkInstallmentsTwoDaysBefore } = require('./checkInstallments');
+const {
+    checkInstallments,
+    checkInstallmentsOneDayBefore,
+    checkInstallmentsTwoDaysBefore,
+} = require('./checkInstallments');
 
 const startCronJobs = () => {
+    // هر روز ساعت ۶ صبح UTC (۹:۳۰ به وقت ایران)
     cron.schedule('0 6 * * *', async () => {
-        console.log('⏳ در حال بررسی اقساط...');
+        console.log('⏳ شروع بررسی اقساط...');
         try {
-            const result = await checkInstallments();
-            console.log(`✅ بررسی تمام شد: ${result.checked} قسط | ${result.notifCreated} اعلان`);
+            const r0 = await checkInstallments();
+            console.log(`✅ امروز: ${r0.checked} قسط | ${r0.notifCreated} اعلان`);
 
-            const result1 = await checkInstallmentsOneDayBefore();
-            console.log(`✅ یادآوری یک‌روز‌قبل: ${result1.checked} قسط | ${result1.notifCreated} اعلان`);
+            const r1 = await checkInstallmentsOneDayBefore();
+            console.log(`✅ فردا: ${r1.checked} قسط | ${r1.notifCreated} اعلان`);
 
-            const result2 = await checkInstallmentsTwoDaysBefore();
-            console.log(`✅ یادآوری دو‌روز‌قبل: ${result2.checked} قسط | ${result2.notifCreated} اعلان`);
+            const r2 = await checkInstallmentsTwoDaysBefore();
+            console.log(`✅ پس‌فردا: ${r2.checked} قسط | ${r2.notifCreated} اعلان`);
         } catch (err) {
-            console.error('❌ خطای کلی در اجرای cron:', err.message);
+            console.error('❌ خطا در کرون:', err.message);
         }
     });
+
+    console.log('✅ کرون‌جاب اقساط فعال شد.');
 };
 
 module.exports = startCronJobs;
