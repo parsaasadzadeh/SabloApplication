@@ -9,20 +9,18 @@ const MAX_CUSTOM_CATEGORIES_PER_USER = 30;
 // ---------------------------------------------------------------------
 // helper تاریخ
 // ---------------------------------------------------------------------
-
 const buildDateMatch = (from, to) => {
-  const dateMatch = {};
-  if (from || to) {
-    dateMatch.date = {};
-    if (from) dateMatch.date.$gte = new Date(from);
-    if (to) {
-      // ← به جای setHours (local time) از UTC استفاده کن
-      const toDate = new Date(to);
-      toDate.setUTCHours(23, 59, 59, 999);
-      dateMatch.date.$lte = toDate;
+    const dateMatch = {};
+    if (from || to) {
+        dateMatch.date = {};
+        if (from) dateMatch.date.$gte = new Date(from);
+        if (to) {
+            const toDate = new Date(to);
+            toDate.setHours(23, 59, 59, 999);
+            dateMatch.date.$lte = toDate;
+        }
     }
-  }
-  return dateMatch;
+    return dateMatch;
 };
 
 // ---------------------------------------------------------------------
