@@ -884,8 +884,8 @@ exports.getLoans = async (req, res) => {
             const unpaid   = insts.filter(i => !i.isPaid);
             const nextInst = unpaid[0] || null;
 
-            const paidAmount  = paid * (insts[0]?.amount || 0);
-            const totalAmount = total * (insts[0]?.amount || 0);
+    const paidAmount  = insts.filter(i => i.isPaid).reduce((sum, i) => sum + i.amount, 0);
+    const totalAmount = insts.reduce((sum, i) => sum + i.amount, 0);
 
             const cardInfo = loan.cardId ? (cardMap.get(loan.cardId.toString()) || null) : null;
 
