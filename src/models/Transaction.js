@@ -27,6 +27,11 @@ const transactionSchema = new mongoose.Schema({
     ref: 'Card', 
     default: null 
 },
+     goalId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Goal',
+        default: null
+    },
     dueDate: { type: Date }, // تاریخ سررسید قسط یا یادآوری وام
     isPaid: { type: Boolean, default: false }, //وضعیت پرداخت (مخصوص اقساط)
     
@@ -34,5 +39,8 @@ const transactionSchema = new mongoose.Schema({
 }, { timestamps: true });
 // برای سرعت بالای سرچ بر اساس کاربر و تاریخ
 transactionSchema.index({ userId: 1, date: -1 });
+// جدید: برای سرعت محاسبه‌ی مجموع واریزهای هر هدف
+transactionSchema.index({ userId: 1, goalId: 1 });
+
 module.exports = mongoose.model('Transaction', transactionSchema);
 
