@@ -622,8 +622,8 @@ exports.exportTransactionsCSV = async (req, res) => {
         const cardMap = new Map();
         cards.forEach(c => cardMap.set(c._id.toString(), c.name));
 
-        const typeLabel = (type) => {
-            const map = { INCOME: 'درآمد', EXPENSE: 'خرج', INSTALLMENT: 'قسط', LOAN: 'وام' };
+               const typeLabel = (type) => {
+            const map = { INCOME: 'درآمد', EXPENSE: 'خرج', INSTALLMENT: 'قسط', LOAN: 'وام', GOAL_DEPOSIT: 'واریز به هدف' };
             return map[type] || type;
         };
 
@@ -708,23 +708,24 @@ exports.getMonthlyOverview = async (req, res) => {
             }
         ]);
 
-        const monthsMap = {};
+               const monthsMap = {};
         stats.forEach(item => {
             const key = `${item._id.year}-${item._id.month}`;
             if (!monthsMap[key]) {
-                monthsMap[key] = { income: 0, expense: 0, loans: 0, installmentsPaid: 0 };
+                monthsMap[key] = { income: 0, expense: 0, loans: 0, installmentsPaid: 0, goalDeposits: 0 };
             }
             if (item._id.type === 'INCOME') monthsMap[key].income = item.totalAmount;
             if (item._id.type === 'EXPENSE') monthsMap[key].expense = item.totalAmount;
             if (item._id.type === 'LOAN') monthsMap[key].loans = item.totalAmount;
             if (item._id.type === 'INSTALLMENT') monthsMap[key].installmentsPaid = item.totalAmount;
+            if (item._id.type === 'GOAL_DEPOSIT') monthsMap[key].goalDeposits = item.totalAmount;
         });
 
-        const result = [];
+                const result = [];
         for (let i = 0; i < monthsCount; i++) {
             const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
             const key = `${d.getFullYear()}-${d.getMonth() + 1}`;
-            const data = monthsMap[key] || { income: 0, expense: 0, loans: 0, installmentsPaid: 0 };
+            const data = monthsMap[key] || { income: 0, expense: 0, loans: 0, installmentsPaid: 0, goalDeposits: 0 };
 
             result.push({
                 year: d.getFullYear(),
@@ -733,7 +734,7 @@ exports.getMonthlyOverview = async (req, res) => {
                 to: new Date(d.getFullYear(), d.getMonth() + 1, 0, 23, 59, 59),
                 income: data.income,
                 expense: data.expense,
-                balance: (data.income + data.loans) - (data.expense + data.installmentsPaid)
+                balance: (data.income + data.loans) - (data.expense + data.installmentsPaid + data.goalDeposits)
             });
         }
 
