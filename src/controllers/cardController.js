@@ -160,6 +160,7 @@ exports.deleteCard = async (req, res) => {
 // خلاصه مالی یه کارت خاص
 // خلاصه مالی یه کارت خاص
 // خلاصه مالی یه کارت خاص
+// خلاصه مالی یه کارت خاص
 exports.getCardStats = async (req, res) => {
     try {
         const { id } = req.params;
