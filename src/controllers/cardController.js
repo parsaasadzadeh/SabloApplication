@@ -159,6 +159,7 @@ exports.deleteCard = async (req, res) => {
 };
 // خلاصه مالی یه کارت خاص
 // خلاصه مالی یه کارت خاص
+// خلاصه مالی یه کارت خاص
 exports.getCardStats = async (req, res) => {
     try {
         const { id } = req.params;
@@ -196,12 +197,13 @@ exports.getCardStats = async (req, res) => {
             ])
         ]);
 
-        let income = 0, expense = 0, loans = 0, installmentsPaid = 0, transactionCount = 0;
+        let income = 0, expense = 0, loans = 0, installmentsPaid = 0, goalDeposits = 0, transactionCount = 0;
         stats.forEach(item => {
             if (item._id === 'INCOME') income = item.totalAmount;
             if (item._id === 'EXPENSE') expense = item.totalAmount;
             if (item._id === 'LOAN') loans = item.totalAmount;
             if (item._id === 'INSTALLMENT') installmentsPaid = item.totalAmount;
+            if (item._id === 'GOAL_DEPOSIT') goalDeposits = item.totalAmount;
             transactionCount += item.count;
         });
 
@@ -212,7 +214,8 @@ exports.getCardStats = async (req, res) => {
             stats: {
                 totalIncome: income,
                 totalExpense: expense,
-                balance: (income + loans) - (expense + installmentsPaid),
+                totalGoalDeposits: goalDeposits,
+                balance: (income + loans) - (expense + installmentsPaid + goalDeposits),
                 unpaidInstallmentsCount: unpaid.count,
                 unpaidInstallmentsAmount: unpaid.totalRemaining,
                 transactionCount
