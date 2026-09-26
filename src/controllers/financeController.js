@@ -26,7 +26,6 @@ const buildDateMatch = (from, to) => {
 // ---------------------------------------------------------------------
 // helper خلاصه مالی — cardId اختیاریه
 // ---------------------------------------------------------------------
-
 const computeFinanceSummary = async (userId, from, to, cardId = null) => {
     const matchBase = {
         userId: new mongoose.Types.ObjectId(userId),
@@ -67,26 +66,26 @@ const computeFinanceSummary = async (userId, from, to, cardId = null) => {
 
     const rawTotals = stats[0].totals;
     const unpaid = stats[0].unpaidInstallments[0] || { totalRemaining: 0, count: 0 };
-    let income = 0, expense = 0, loans = 0, installmentsPaid = 0;
+    let income = 0, expense = 0, loans = 0, installmentsPaid = 0, goalDeposits = 0;
 
     rawTotals.forEach(item => {
         if (item._id === 'INCOME') income = item.totalAmount;
         if (item._id === 'EXPENSE') expense = item.totalAmount;
         if (item._id === 'LOAN') loans = item.totalAmount;
         if (item._id === 'INSTALLMENT') installmentsPaid = item.totalAmount;
+        if (item._id === 'GOAL_DEPOSIT') goalDeposits = item.totalAmount;
     });
 
     return {
         totalIncome: income,
         totalExpense: expense,
-        // ✅ فیکس باگ: activeDebt = مجموع اقساط پرداخت‌نشده (چه وام‌دار چه شخصی)
+        totalGoalDeposits: goalDeposits,
         activeDebt: unpaid.totalRemaining,
-        cashBalance: (income + loans) - (expense + installmentsPaid),
+        cashBalance: (income + loans) - (expense + installmentsPaid + goalDeposits),
         unpaidInstallmentsCount: unpaid.count,
         unpaidInstallmentsAmount: unpaid.totalRemaining
     };
 };
-
 // ---------------------------------------------------------------------
 // helper اعتبارسنجی کارت — null برگردوندن = کارت نداره (مجاز)
 // throw = کارت نامعتبره
@@ -133,6 +132,10 @@ exports.addTransaction = async (req, res) => {
         if (amount <= 0) {
             return res.status(400).json({ message: 'مبلغ باید بیشتر از صفر باشد' });
         }
+        if (type === 'GOAL_DEPOSIT') {
+            return res.status(400).json({ message: 'این نوع تراکنش فقط از طریق واریز به هدف قابل ثبت است' });
+        }
+
 
         let txDate = new Date();
         if (date) {
