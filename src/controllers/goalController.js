@@ -1,53 +1,34 @@
 const Goal = require('../models/Goal');
 const Transaction = require('../models/Transaction');
+const Card = require('../models/Card');
 const mongoose = require('mongoose');
 
-const calculateProgress = async (userId, goalCreatedAt) => {
+// ---------------------------------------------------------------------
+// helper: مجموع واریزهای یک هدف + تفکیک بر اساس کارت
+// ---------------------------------------------------------------------
+const calculateGoalProgress = async (userId, goalId) => {
     const stats = await Transaction.aggregate([
         {
             $match: {
                 userId: new mongoose.Types.ObjectId(userId),
-                date: { $gte: goalCreatedAt }
+                goalId: new mongoose.Types.ObjectId(goalId),
+                type: 'GOAL_DEPOSIT'
             }
         },
         {
-            $facet: {
-                totals: [
-                    {
-                        $group: {
-                            _id: '$type',
-                            totalAmount: {
-                                $sum: {
-                                    $cond: [
-                                        { $eq: ['$type', 'INSTALLMENT'] },
-                                        { $cond: ['$isPaid', '$amount', 0] },
-                                        '$amount'
-                                    ]
-                                }
-                            }
-                        }
-                    }
-                ]
+            $group: {
+                _id: '$cardId',
+                totalAmount: { $sum: '$amount' },
+                count: { $sum: 1 }
             }
         }
     ]);
 
-    const rawTotals = stats[0].totals;
-    let income = 0, expense = 0, loans = 0, installmentsPaid = 0;
-
-    rawTotals.forEach(item => {
-        if (item._id === 'INCOME') income = item.totalAmount;
-        if (item._id === 'EXPENSE') expense = item.totalAmount;
-        if (item._id === 'LOAN') loans = item.totalAmount;
-        if (item._id === 'INSTALLMENT') installmentsPaid = item.totalAmount;
-    });
-
-    // پس‌انداز = درآمد - مخارج - اقساط پرداخت شده
-    const savedAmount = (income + loans) - (expense + installmentsPaid);
-    return Math.max(0, savedAmount);
+    const savedAmount = stats.reduce((sum, s) => sum + s.totalAmount, 0);
+    return { savedAmount, breakdown: stats };
 };
 
-// پیش‌بینی زمان رسیدن به هدف بر اساس میانگین ماهانه
+// پیش‌بینی زمان رسیدن به هدف بر اساس میانگین ماهانه واریزهای واقعی همون هدف
 const predictMonths = (savedAmount, targetAmount, goalCreatedAt) => {
     const now = new Date();
     const monthsElapsed = Math.max(1,
@@ -65,17 +46,27 @@ const predictMonths = (savedAmount, targetAmount, goalCreatedAt) => {
 exports.getGoals = async (req, res) => {
     try {
         const goals = await Goal.find({ userId: req.user.id }).sort({ createdAt: -1 });
+        const cards = await Card.find({ userId: req.user.id }).lean();
+        const cardMap = new Map();
+        cards.forEach(c => cardMap.set(c._id.toString(), { name: c.name, icon: c.icon, color: c.color }));
 
         const goalsWithProgress = await Promise.all(
             goals.map(async (goal) => {
-                const savedAmount = await calculateProgress(req.user.id, goal.createdAt);
+                const { savedAmount, breakdown } = await calculateGoalProgress(req.user.id, goal._id);
                 const percent = Math.min(100, Math.round((savedAmount / goal.targetAmount) * 100));
                 const predictedMonths = predictMonths(savedAmount, goal.targetAmount, goal.createdAt);
                 const remaining = Math.max(0, goal.targetAmount - savedAmount);
 
-                // چک کن deadline رسیده یا نه
                 const isExpired = new Date() > new Date(goal.deadline);
                 const isCompleted = savedAmount >= goal.targetAmount;
+
+                // تفکیک واریزها بر اساس کارت — کاربر می‌بینه چقدر از کدوم کارت گذاشته
+                const depositsByCard = breakdown.map(b => ({
+                    cardId: b._id,
+                    cardInfo: b._id ? (cardMap.get(b._id.toString()) || null) : null,
+                    amount: b.totalAmount,
+                    count: b.count
+                }));
 
                 return {
                     ...goal.toObject(),
@@ -85,6 +76,7 @@ exports.getGoals = async (req, res) => {
                     predictedMonths,
                     isExpired,
                     isCompleted,
+                    depositsByCard,
                 };
             })
         );
@@ -95,7 +87,7 @@ exports.getGoals = async (req, res) => {
     }
 };
 
-// ── ساخت هدف جدید ────────────────────────────────────────────────────────────
+// ── ساخت هدف جدید (بدون تغییر) ────────────────────────────────────────────────
 exports.createGoal = async (req, res) => {
     try {
         const { title, targetAmount, deadline } = req.body;
@@ -103,11 +95,9 @@ exports.createGoal = async (req, res) => {
         if (!title || !targetAmount || !deadline) {
             return res.status(400).json({ message: 'عنوان، مبلغ هدف و ددلاین الزامی هستند' });
         }
-
         if (targetAmount <= 0) {
             return res.status(400).json({ message: 'مبلغ هدف باید بیشتر از صفر باشد' });
         }
-
         if (new Date(deadline) <= new Date()) {
             return res.status(400).json({ message: 'تاریخ هدف باید در آینده باشد' });
         }
@@ -125,24 +115,125 @@ exports.createGoal = async (req, res) => {
     }
 };
 
-// ── حذف هدف ──────────────────────────────────────────────────────────────────
-exports.deleteGoal = async (req, res) => {
+// ── واریز به هدف (جدید) ────────────────────────────────────────────────────────
+exports.depositToGoal = async (req, res) => {
     try {
-        const { id } = req.params;
+        const { id } = req.params; // goalId
+        const { cardId, amount, date, description } = req.body;
 
-        const goal = await Goal.findOneAndDelete({ _id: id, userId: req.user.id });
+        if (!amount || amount <= 0) {
+            return res.status(400).json({ message: 'مبلغ واریز باید بیشتر از صفر باشد' });
+        }
+        if (!cardId) {
+            return res.status(400).json({ message: 'انتخاب کارت الزامی است' });
+        }
 
+        const goal = await Goal.findOne({ _id: id, userId: req.user.id });
         if (!goal) {
             return res.status(404).json({ message: 'هدف مورد نظر یافت نشد' });
         }
 
-        res.status(200).json({ message: 'هدف با موفقیت حذف شد' });
+        const card = await Card.findOne({ _id: cardId, userId: req.user.id });
+        if (!card) {
+            return res.status(400).json({ message: 'کارت انتخاب‌شده معتبر نیست' });
+        }
+
+        let txDate = new Date();
+        if (date) {
+            const parsedDate = new Date(date);
+            if (isNaN(parsedDate.getTime())) {
+                return res.status(400).json({ message: 'تاریخ نامعتبر است' });
+            }
+            const oneDayMs = 24 * 60 * 60 * 1000;
+            if (parsedDate.getTime() > Date.now() + oneDayMs) {
+                return res.status(400).json({ message: 'تاریخ نمی‌تواند در آینده باشد' });
+            }
+            txDate = parsedDate;
+        }
+
+        const deposit = await Transaction.create({
+            userId: req.user.id,
+            type: 'GOAL_DEPOSIT',
+            amount,
+            title: `واریز به هدف «${goal.title}»`,
+            description: description?.trim() || '',
+            date: txDate,
+            category: null,
+            cardId: card._id,
+            goalId: goal._id,
+            isPaid: true,
+        });
+
+        const { savedAmount } = await calculateGoalProgress(req.user.id, goal._id);
+
+        res.status(201).json({
+            message: 'واریز با موفقیت ثبت شد',
+            deposit,
+            savedAmount,
+            isCompleted: savedAmount >= goal.targetAmount,
+        });
     } catch (error) {
         res.status(500).json({ message: 'خطای سرور', error: error.message });
     }
 };
 
-// ── ویرایش هدف ───────────────────────────────────────────────────────────────
+// ── تاریخچه‌ی واریزهای یک هدف (جدید — برای صفحه‌ی جزئیات هدف) ──────────────────
+exports.getGoalDeposits = async (req, res) => {
+    try {
+        const { id } = req.params;
+
+        const goal = await Goal.findOne({ _id: id, userId: req.user.id });
+        if (!goal) {
+            return res.status(404).json({ message: 'هدف مورد نظر یافت نشد' });
+        }
+
+        const deposits = await Transaction.find({
+            userId: req.user.id,
+            goalId: goal._id,
+            type: 'GOAL_DEPOSIT'
+        }).sort({ date: -1 }).populate('cardId', 'name icon color').lean();
+
+        res.status(200).json({ deposits });
+    } catch (error) {
+        res.status(500).json({ message: 'خطای سرور', error: error.message });
+    }
+};
+
+// ── حذف هدف ──────────────────────────────────────────────────────────────────
+// deleteTransactions=true → واریزهای مربوطه هم حذف میشن (مثل حذف کارت با تراکنش‌هاش)
+// پیش‌فرض → فقط goalId ازشون برداشته میشه، خودشون به‌عنوان GOAL_DEPOSIT بدون هدف می‌مونن
+exports.deleteGoal = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const deleteTransactions = req.query.deleteTransactions === 'true';
+
+        const goal = await Goal.findOne({ _id: id, userId: req.user.id });
+        if (!goal) {
+            return res.status(404).json({ message: 'هدف مورد نظر یافت نشد' });
+        }
+
+        if (deleteTransactions) {
+            await Transaction.deleteMany({ goalId: goal._id, userId: req.user.id, type: 'GOAL_DEPOSIT' });
+        } else {
+            await Transaction.updateMany(
+                { goalId: goal._id, userId: req.user.id, type: 'GOAL_DEPOSIT' },
+                { $set: { goalId: null } }
+            );
+        }
+
+        await Goal.deleteOne({ _id: id });
+
+        res.status(200).json({
+            message: deleteTransactions
+                ? 'هدف و واریزهای مربوطه حذف شدند'
+                : 'هدف حذف شد و واریزها به‌عنوان تراکنش عادی باقی ماندند'
+        });
+    } catch (error) {
+        res.status(500).json({ message: 'خطای سرور', error: error.message });
+    }
+};
+
+// ── ویرایش هدف (بدون تغییر) ───────────────────────────────────────────────────
 exports.updateGoal = async (req, res) => {
     try {
         const { id } = req.params;
