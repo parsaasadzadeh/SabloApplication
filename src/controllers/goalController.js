@@ -115,7 +115,7 @@ exports.createGoal = async (req, res) => {
     }
 };
 
-// ── واریز به هدف (جدید) ────────────────────────────────────────────────────────
+// ── واریز به هدف — کارت دیگه اجباری نیست ────────────────────────────────────
 exports.depositToGoal = async (req, res) => {
     try {
         const { id } = req.params; // goalId
@@ -124,18 +124,20 @@ exports.depositToGoal = async (req, res) => {
         if (!amount || amount <= 0) {
             return res.status(400).json({ message: 'مبلغ واریز باید بیشتر از صفر باشد' });
         }
-        if (!cardId) {
-            return res.status(400).json({ message: 'انتخاب کارت الزامی است' });
-        }
 
         const goal = await Goal.findOne({ _id: id, userId: req.user.id });
         if (!goal) {
             return res.status(404).json({ message: 'هدف مورد نظر یافت نشد' });
         }
 
-        const card = await Card.findOne({ _id: cardId, userId: req.user.id });
-        if (!card) {
-            return res.status(400).json({ message: 'کارت انتخاب‌شده معتبر نیست' });
+        // اگه کارتی فرستاده شده، اعتبارش رو چک کن؛ اگه نه، بدون کارت ثبت میشه
+        let resolvedCardId = null;
+        if (cardId) {
+            const card = await Card.findOne({ _id: cardId, userId: req.user.id });
+            if (!card) {
+                return res.status(400).json({ message: 'کارت انتخاب‌شده معتبر نیست' });
+            }
+            resolvedCardId = card._id;
         }
 
         let txDate = new Date();
@@ -159,7 +161,7 @@ exports.depositToGoal = async (req, res) => {
             description: description?.trim() || '',
             date: txDate,
             category: null,
-            cardId: card._id,
+            cardId: resolvedCardId,
             goalId: goal._id,
             isPaid: true,
         });
@@ -177,7 +179,7 @@ exports.depositToGoal = async (req, res) => {
     }
 };
 
-// ── تاریخچه‌ی واریزهای یک هدف (جدید — برای صفحه‌ی جزئیات هدف) ──────────────────
+// ── تاریخچه‌ی واریزهای یک هدف (بدون تغییر) ──────────────────────────────────
 exports.getGoalDeposits = async (req, res) => {
     try {
         const { id } = req.params;
@@ -199,9 +201,7 @@ exports.getGoalDeposits = async (req, res) => {
     }
 };
 
-// ── حذف هدف ──────────────────────────────────────────────────────────────────
-// deleteTransactions=true → واریزهای مربوطه هم حذف میشن (مثل حذف کارت با تراکنش‌هاش)
-// پیش‌فرض → فقط goalId ازشون برداشته میشه، خودشون به‌عنوان GOAL_DEPOSIT بدون هدف می‌مونن
+// ── حذف هدف (بدون تغییر) ─────────────────────────────────────────────────────
 exports.deleteGoal = async (req, res) => {
     try {
         const { id } = req.params;
