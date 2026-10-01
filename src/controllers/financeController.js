@@ -750,7 +750,9 @@ exports.getMonthlyOverview = async (req, res) => {
 };
 
 // ---------------------------------------------------------------------
-// ساخت وام + اقساط خودکار
+// ساخت وام + اقساط
+// تاریخ سررسید همه اقساط از فرانت میاد (installmentDates) و اینجا فقط
+// اعتبارسنجی و ذخیره میشه؛ هیچ محاسبه‌ی تاریخی (مثل setMonth) در بک‌اند نیست.
 // ---------------------------------------------------------------------
 
 exports.createLoanWithInstallments = async (req, res) => {
@@ -760,30 +762,39 @@ exports.createLoanWithInstallments = async (req, res) => {
             totalAmount,
             installmentCount,
             installmentAmount,
-            firstDueDate,
+            installmentDates,
             description,
             cardId,
         } = req.body;
 
-        if (!title || !title.trim()) {
+        const count = Number(installmentCount);
+
+        if (!title || !String(title).trim()) {
             return res.status(400).json({ message: 'نام وام الزامی است' });
         }
         if (!totalAmount || totalAmount <= 0) {
             return res.status(400).json({ message: 'مبلغ کل وام باید بیشتر از صفر باشد' });
         }
-        if (!installmentCount || installmentCount < 1 || installmentCount > 360) {
+        if (!Number.isInteger(count) || count < 1 || count > 360) {
             return res.status(400).json({ message: 'تعداد اقساط باید بین ۱ تا ۳۶۰ باشد' });
         }
         if (!installmentAmount || installmentAmount <= 0) {
             return res.status(400).json({ message: 'مبلغ هر قسط باید بیشتر از صفر باشد' });
         }
-        if (!firstDueDate) {
-            return res.status(400).json({ message: 'تاریخ اولین قسط الزامی است' });
+
+        // ── تاریخ اقساط ──────────────────────────────────────────────────
+        if (!Array.isArray(installmentDates) || installmentDates.length !== count) {
+            return res.status(400).json({ message: 'تاریخ اقساط الزامی است و باید با تعداد اقساط برابر باشد' });
         }
 
-        const parsedFirstDue = new Date(firstDueDate);
-        if (isNaN(parsedFirstDue.getTime())) {
-            return res.status(400).json({ message: 'تاریخ اولین قسط نامعتبر است' });
+        const dueDates = installmentDates.map(d => (typeof d === 'string' ? new Date(d) : new Date(NaN)));
+        if (dueDates.some(d => isNaN(d.getTime()))) {
+            return res.status(400).json({ message: 'تاریخ اقساط نامعتبر است' });
+        }
+        for (let i = 1; i < dueDates.length; i++) {
+            if (dueDates[i].getTime() <= dueDates[i - 1].getTime()) {
+                return res.status(400).json({ message: 'تاریخ اقساط باید به ترتیب صعودی باشد' });
+            }
         }
 
         let resolvedCardId = null;
@@ -793,13 +804,16 @@ exports.createLoanWithInstallments = async (req, res) => {
             return res.status(400).json({ message: 'کارت انتخاب‌شده معتبر نیست' });
         }
 
-        const lastDueDate = new Date(parsedFirstDue);
-                lastDueDate.setMonth(lastDueDate.getMonth() + (installmentCount - 1));
+        const firstDueDate = dueDates[0];
+        const lastDueDate  = dueDates[dueDates.length - 1];
+        const cleanTitle   = String(title).trim();
+
+        // ── تراکنش اصلی وام ──────────────────────────────────────────────
         const loanTx = await Transaction.create({
             userId:      req.user.id,
             type:        'LOAN',
             amount:      totalAmount,
-            title:       title.trim(),
+            title:       cleanTitle,
             description: description?.trim() || '',
             date:        new Date(),
             dueDate:     lastDueDate,
@@ -809,36 +823,38 @@ exports.createLoanWithInstallments = async (req, res) => {
             cardId:      resolvedCardId,
         });
 
-               const installments = [];
-        for (let i = 0; i < installmentCount; i++) {
-            const dueDate = new Date(parsedFirstDue);
-            dueDate.setMonth(dueDate.getMonth() + i);
-            installments.push({
-                userId:      req.user.id,
-                type:        'INSTALLMENT',
-                amount:      installmentAmount,
-                title:       `${title.trim()} — قسط ${i + 1} از ${installmentCount}`,
-                description: '',
-                date:        new Date(),
-                dueDate:     dueDate,
-                isPaid:      false,
-                loanId:      loanTx._id,
-                category:    null,
-                cardId:      resolvedCardId,
-            });
+        // ── اقساط ────────────────────────────────────────────────────────
+        const installments = dueDates.map((dueDate, i) => ({
+            userId:      req.user.id,
+            type:        'INSTALLMENT',
+            amount:      installmentAmount,
+            title:       `${cleanTitle} — قسط ${i + 1} از ${count}`,
+            description: '',
+            date:        new Date(),
+            dueDate,
+            isPaid:      false,
+            loanId:      loanTx._id,
+            category:    null,
+            cardId:      resolvedCardId,
+        }));
+
+        try {
+            await Transaction.insertMany(installments);
+        } catch (insertError) {
+            // اگه ساخت اقساط شکست خورد، وام نیمه‌کاره باقی نمونه
+            await Transaction.deleteOne({ _id: loanTx._id });
+            throw insertError;
         }
 
-        await Transaction.insertMany(installments);
-
         res.status(201).json({
-            message: `وام با ${installmentCount} قسط با موفقیت ثبت شد`,
+            message: `وام با ${count} قسط با موفقیت ثبت شد`,
             loan: {
                 _id:              loanTx._id,
                 title:            loanTx.title,
                 totalAmount,
-                installmentCount,
+                installmentCount: count,
                 installmentAmount,
-                firstDueDate:     parsedFirstDue,
+                firstDueDate,
                 lastDueDate,
                 cardId:           resolvedCardId,
             },
