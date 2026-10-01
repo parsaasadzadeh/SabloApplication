@@ -3,7 +3,7 @@ const Category = require('../models/Category');
 const Card = require('../models/Card');
 const mongoose = require('mongoose');
 const CATEGORIES = require('../constants/categories');
-
+const { toJalali, fromJalali, daysInMonth } = require('../utils/jalali');
 const MAX_CUSTOM_CATEGORIES_PER_USER = 30;
 
 // ---------------------------------------------------------------------
@@ -85,6 +85,24 @@ const computeFinanceSummary = async (userId, from, to, cardId = null) => {
         unpaidInstallmentsCount: unpaid.count,
         unpaidInstallmentsAmount: unpaid.totalRemaining
     };
+};
+
+
+
+
+const addJalaliMonths = (date, monthsToAdd) => {
+    const { jy, jm, jd } = toJalali(date.getFullYear(), date.getMonth() + 1, date.getDate());
+
+    let newJm = jm + monthsToAdd;
+    let newJy = jy + Math.floor((newJm - 1) / 12);
+    newJm = ((newJm - 1) % 12 + 12) % 12 + 1;
+
+    // اگه روز مبدا از آخرین روز ماه مقصد بیشتر بود (مثلاً روز ۳۱ تو ماهی که ۳۰ روزه)، به آخرین روز اون ماه محدودش کن
+    const monthLength = daysInMonth(newJy, newJm);
+    const newJd = Math.min(jd, monthLength);
+
+    const g = fromJalali(newJy, newJm, newJd);
+    return new Date(g.gy, g.gm - 1, g.gd, date.getHours(), date.getMinutes(), date.getSeconds());
 };
 // ---------------------------------------------------------------------
 // helper اعتبارسنجی کارت — null برگردوندن = کارت نداره (مجاز)
@@ -791,8 +809,7 @@ exports.createLoanWithInstallments = async (req, res) => {
         }
 
         const lastDueDate = new Date(parsedFirstDue);
-        lastDueDate.setMonth(lastDueDate.getMonth() + (installmentCount - 1));
-
+        const lastDueDate = addJalaliMonths(parsedFirstDue, installmentCount - 1);
         const loanTx = await Transaction.create({
             userId:      req.user.id,
             type:        'LOAN',
@@ -809,9 +826,7 @@ exports.createLoanWithInstallments = async (req, res) => {
 
         const installments = [];
         for (let i = 0; i < installmentCount; i++) {
-            const dueDate = new Date(parsedFirstDue);
-            dueDate.setMonth(dueDate.getMonth() + i);
-
+            const dueDate = addJalaliMonths(parsedFirstDue, i);
             installments.push({
                 userId:      req.user.id,
                 type:        'INSTALLMENT',
