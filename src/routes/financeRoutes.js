@@ -16,7 +16,9 @@ const {
     getMonthlyOverview,
     createLoanWithInstallments,
     getLoans, 
-    getUnpaidInstallments
+    getUnpaidInstallments  , 
+    calculateDong , 
+    saveDongAsExpense
 } = require('../controllers/financeController');
 const { protect } = require('../middlewares/authMiddleware');
 router.use(protect);
@@ -38,4 +40,10 @@ router.get('/unpaid-installments', getUnpaidInstallments);
 //قسط و وام 
 router.post('/loans/create', createLoanWithInstallments);
 router.get('/loans', getLoans);
+
+//ماشین حساب دنگ
+router.post('/dong/calculate', calculateDong);
+router.post('/dong/save', saveDongAsExpense);
 module.exports = router;
+
+
