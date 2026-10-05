@@ -20,6 +20,7 @@ const {
     calculateDong , 
     saveDongAsExpense
 } = require('../controllers/financeController');
+const sms = require('../controllers/smsImportController');
 const { protect } = require('../middlewares/authMiddleware');
 router.use(protect);
 router.post('/add', addTransaction);
@@ -44,6 +45,13 @@ router.get('/loans', getLoans);
 //ماشین حساب دنگ
 router.post('/dong/calculate', calculateDong);
 router.post('/dong/save', saveDongAsExpense);
+
+
+//بانک
+router.post('/sms/import', protect, sms.importSms);
+router.get('/sms/pending', protect, sms.getPendingSms);
+router.post('/sms/:id/confirm', protect, sms.confirmSms);
+router.post('/sms/:id/reject', protect, sms.rejectSms);
 module.exports = router;
 
 
