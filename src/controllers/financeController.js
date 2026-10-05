@@ -3,6 +3,7 @@ const Category = require('../models/Category');
 const Card = require('../models/Card');
 const mongoose = require('mongoose');
 const CATEGORIES = require('../constants/categories');
+const { calculateDong } = require('../utils/dongCalculator');
 const MAX_CUSTOM_CATEGORIES_PER_USER = 30;
 
 // ---------------------------------------------------------------------
@@ -965,6 +966,73 @@ exports.getUnpaidInstallments = async (req, res) => {
             .lean();
 
         res.status(200).json({ installments });
+    } catch (error) {
+        res.status(500).json({ message: 'خطای سرور', error: error.message });
+    }
+};
+
+
+exports.calculateDong = async (req, res) => {
+    try {
+        const { participants } = req.body;
+
+        if (!Array.isArray(participants) || participants.length < 2 || participants.length > 30) {
+            return res.status(400).json({ message: 'تعداد افراد باید بین ۲ تا ۳۰ باشد' });
+        }
+
+        for (const p of participants) {
+            if (!String(p.name ?? '').trim()) {
+                return res.status(400).json({ message: 'نام همه افراد الزامی است' });
+            }
+            if (!Number.isInteger(p.paid) || p.paid < 0) {
+                return res.status(400).json({ message: 'مبلغ پرداختی باید عدد صحیح و غیرمنفی باشد' });
+            }
+            if (p.weight !== undefined && (!Number.isInteger(p.weight) || p.weight < 1)) {
+                return res.status(400).json({ message: 'وزن سهم نامعتبر است' });
+            }
+        }
+
+        const result = calculateDong(participants);
+        if (result.total === 0) {
+            return res.status(400).json({ message: 'جمع هزینه‌ها صفر است' });
+        }
+
+        res.status(200).json({ ...result, settlementsCount: result.settlements.length });
+    } catch (error) {
+        res.status(500).json({ message: 'خطای سرور', error: error.message });
+    }
+};
+
+// ثبت سهم خودم از دنگ به‌عنوان خرج در حسابداری
+exports.saveDongAsExpense = async (req, res) => {
+    try {
+        const { title, myShare, category, cardId } = req.body;
+
+        if (!Number.isInteger(myShare) || myShare <= 0) {
+            return res.status(400).json({ message: 'مبلغ سهم نامعتبر است' });
+        }
+
+        const categoryMap = await getUserCategoryMap(req.user.id);
+        let resolvedCardId = null;
+        try {
+            resolvedCardId = await resolveCardId(cardId, req.user.id);
+        } catch {
+            return res.status(400).json({ message: 'کارت انتخاب‌شده معتبر نیست' });
+        }
+
+        const tx = await Transaction.create({
+            userId: req.user.id,
+            type: 'EXPENSE',
+            amount: myShare,
+            title: title?.trim() || 'دنگ',
+            description: 'ثبت‌شده از ماشین‌حساب دنگی',
+            date: new Date(),
+            category: resolveCategoryId(category, categoryMap),
+            cardId: resolvedCardId,
+            isPaid: true,
+        });
+
+        res.status(201).json({ message: 'سهم شما به‌عنوان خرج ثبت شد', transaction: tx });
     } catch (error) {
         res.status(500).json({ message: 'خطای سرور', error: error.message });
     }
