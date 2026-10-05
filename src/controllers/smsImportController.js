@@ -6,7 +6,7 @@ const Category = require('../models/Category');
 const Card = require('../models/Card');
 const CATEGORIES = require('../constants/categories');
 
-const MAX_BATCH = 50;                      // حداکثر پیامک در هر درخواست
+const MAX_BATCH = 20;                      // حداکثر پیامک در هر درخواست (با سقف 10kb بدنه در server.js هم‌خوان است)
 const MAX_PENDING_PER_USER = 500;          // سقف صف تأییدنشده
 const MAX_AMOUNT = 10_000_000_000_000;     // سقف منطقی مبلغ (ریال)
 const MAX_AGE_DAYS = 400;                  // پیامک قدیمی‌تر از این پذیرفته نمی‌شود
