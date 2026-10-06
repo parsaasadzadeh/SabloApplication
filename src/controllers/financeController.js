@@ -646,11 +646,18 @@ exports.exportTransactionsCSV = async (req, res) => {
         const cardMap = new Map();
         cards.forEach(c => cardMap.set(c._id.toString(), c.name));
 
-               const typeLabel = (type) => {
-            const map = { INCOME: 'درآمد', EXPENSE: 'خرج', INSTALLMENT: 'قسط', LOAN: 'وام', GOAL_DEPOSIT: 'واریز به هدف' };
-            return map[type] || type;
-        };
-
+      const typeLabel = (type) => {
+    const map = {
+        INCOME: 'درآمد',
+        EXPENSE: 'خرج',
+        INSTALLMENT: 'قسط',
+        LOAN: 'وام',
+        GOAL_DEPOSIT: 'واریز به هدف',
+        TRANSFER_IN: 'انتقال ورودی',
+        TRANSFER_OUT: 'انتقال خروجی',
+    };
+    return map[type] || type;
+};
         const categoryLabel = (catId) => {
             const info = lookupCategoryInfo(catId, categoryMap);
             return info ? `${info.icon} ${info.label}` : '-';
