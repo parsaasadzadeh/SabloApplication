@@ -9,9 +9,14 @@ const CATEGORIES = require('../constants/categories');
 const MAX_BATCH = 20;                      // حداکثر پیامک در هر درخواست (با سقف 10kb بدنه در server.js هم‌خوان است)
 const MAX_PENDING_PER_USER = 500;          // سقف صف تأییدنشده
 const MAX_AMOUNT = 10_000_000_000_000;     // سقف منطقی مبلغ (ریال)
-const MAX_AGE_DAYS = 400;                  // پیامک قدیمی‌تر از این پذیرفته نمی‌شود
+const MAX_AGE_DAYS = 30;                   // پیامک قدیمی‌تر از این پذیرفته نمی‌شود (باید < RETENTION_DAYS مدل باشد)
 const DUP_WINDOW_MS = 6 * 60 * 60 * 1000;  // پنجره‌ی تشخیص شباهت با تراکنش دستی
+const STALE_CLAIM_MS = 2 * 60 * 1000;      // CONFIRMING قدیمی‌تر از این (مثلاً کرش سرور) دوباره قابل claim است
 const HASH_RE = /^[a-f0-9]{64}$/;
+
+if (MAX_AGE_DAYS >= SmsImport.RETENTION_DAYS) {
+    throw new Error('MAX_AGE_DAYS must be smaller than SmsImport.RETENTION_DAYS');
+}
 
 // ---------------------------------------------------------------------
 // helperها
@@ -24,6 +29,11 @@ const cleanStr = (v, max) =>
         .slice(0, max);
 
 const isObjectId = (v) => mongoose.Types.ObjectId.isValid(v) && String(new mongoose.Types.ObjectId(v)) === String(v);
+
+const serverError = (res, where, error) => {
+    console.error(`[sms:${where}]`, error);
+    return res.status(500).json({ message: 'خطای سرور' });
+};
 
 const buildTitle = (direction, bank, counterparty) => {
     const base = direction === 'DEPOSIT' ? 'واریز' : 'برداشت';
@@ -81,17 +91,17 @@ const validateItem = (raw) => {
     };
 };
 
+// دسته‌ی نامعتبر => null (و کنترلر 400 می‌دهد)
 const resolveCategory = async (category, userId) => {
-    if (!category) return null;
+    if (typeof category !== 'string') return null;
     if (CATEGORIES.some((c) => c.id === category)) return category;
     const custom = await Category.exists({ id: category, userId });
     return custom ? category : null;
 };
 
 const resolveCardId = async (cardId, userId) => {
-    if (!cardId) return null;
     if (!isObjectId(cardId)) throw new Error('INVALID_CARD');
-    const card = await Card.findOne({ _id: cardId, userId });
+    const card = await Card.findOne({ _id: cardId, userId }).select('_id').lean();
     if (!card) throw new Error('INVALID_CARD');
     return card._id;
 };
@@ -188,7 +198,7 @@ exports.importSms = async (req, res) => {
 
         res.status(200).json({ message: 'پیامک‌ها دریافت شد', summary, results });
     } catch (error) {
-        res.status(500).json({ message: 'خطای سرور', error: error.message });
+        serverError(res, 'import', error);
     }
 };
 
@@ -198,8 +208,8 @@ exports.importSms = async (req, res) => {
 // ---------------------------------------------------------------------
 exports.getPendingSms = async (req, res) => {
     try {
-        const page = Math.max(parseInt(req.query.page) || 1, 1);
-        const limit = Math.min(Math.max(parseInt(req.query.limit) || 20, 1), 50);
+        const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
+        const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 20, 1), 50);
         const filter = { userId: req.user.id, status: 'PENDING' };
 
         const [items, total] = await Promise.all([
@@ -219,18 +229,23 @@ exports.getPendingSms = async (req, res) => {
             items,
         });
     } catch (error) {
-        res.status(500).json({ message: 'خطای سرور', error: error.message });
+        serverError(res, 'pending', error);
     }
 };
 
 // ---------------------------------------------------------------------
 // ۳) تأیید و تبدیل به تراکنش واقعی
 // POST /finance/sms/:id/confirm   body: { title?, category?, cardId?, type? }
+//
+// ضدتکراری: شناسه‌ی تراکنش پیش از ساخت روی SmsImport ذخیره می‌شود و تراکنش با همان
+// _id ساخته می‌شود. پس هر تلاش مجدد (خطا یا کرش وسط کار) یا همان تراکنش را پیدا
+// می‌کند یا دقیقاً با همان _id می‌سازد و هرگز دو تراکنش ایجاد نمی‌شود.
 // ---------------------------------------------------------------------
 exports.confirmSms = async (req, res) => {
     const { id } = req.params;
     const userId = req.user.id;
     let claimed = false;
+    let txId = null;
 
     try {
         if (!isObjectId(id)) return res.status(400).json({ message: 'شناسه نامعتبر است' });
@@ -242,16 +257,30 @@ exports.confirmSms = async (req, res) => {
         }
 
         let resolvedCardId = null;
-        try {
-            resolvedCardId = await resolveCardId(cardId, userId);
-        } catch {
-            return res.status(400).json({ message: 'کارت انتخاب‌شده معتبر نیست' });
+        if (cardId !== undefined && cardId !== null && cardId !== '') {
+            try {
+                resolvedCardId = await resolveCardId(cardId, userId);
+            } catch {
+                return res.status(400).json({ message: 'کارت انتخاب‌شده معتبر نیست' });
+            }
         }
-        const resolvedCategory = await resolveCategory(category, userId);
 
-        // claim اتمیک: فقط یک درخواست می‌تواند PENDING را بردارد
+        let resolvedCategory = null;
+        if (category !== undefined && category !== null && category !== '') {
+            resolvedCategory = await resolveCategory(category, userId);
+            if (!resolvedCategory) return res.status(400).json({ message: 'دسته‌بندی انتخاب‌شده معتبر نیست' });
+        }
+
+        // claim اتمیک: فقط یک درخواست می‌تواند بردارد (PENDING یا CONFIRMING کهنه‌ی مانده از کرش)
         const item = await SmsImport.findOneAndUpdate(
-            { _id: id, userId, status: 'PENDING' },
+            {
+                _id: id,
+                userId,
+                $or: [
+                    { status: 'PENDING' },
+                    { status: 'CONFIRMING', updatedAt: { $lt: new Date(Date.now() - STALE_CLAIM_MS) } },
+                ],
+            },
             { $set: { status: 'CONFIRMING' } },
             { new: true }
         );
@@ -264,32 +293,58 @@ exports.confirmSms = async (req, res) => {
         }
         claimed = true;
 
-        const cleanTitle = cleanStr(title, 100) || item.suggestedTitle || 'تراکنش بانکی';
+        // شناسه‌ی تراکنش را قبل از ساخت ثبت می‌کنیم (در تلاش مجدد همان قبلی استفاده می‌شود)
+        txId = item.transactionId || new mongoose.Types.ObjectId();
+        if (!item.transactionId) {
+            await SmsImport.updateOne({ _id: item._id }, { $set: { transactionId: txId } });
+        }
 
-        const tx = await Transaction.create({
-            userId,
-            type: type || item.type,
-            amount: item.amount,
-            title: cleanTitle,
-            description: 'ثبت‌شده از پیامک بانکی',
-            date: item.date,
-            category: resolvedCategory,
-            cardId: resolvedCardId,
-            isPaid: true,
-        });
+        let tx = await Transaction.findOne({ _id: txId, userId });
+        if (!tx) {
+            const cleanTitle = cleanStr(title, 100) || item.suggestedTitle || 'تراکنش بانکی';
+            tx = await Transaction.create({
+                _id: txId,
+                userId,
+                type: type || item.type,
+                amount: item.amount,
+                title: cleanTitle,
+                description: 'ثبت‌شده از پیامک بانکی',
+                date: item.date,
+                category: resolvedCategory,
+                cardId: resolvedCardId,
+                isPaid: true,
+            });
+        }
 
         await SmsImport.updateOne(
             { _id: item._id },
             { $set: { status: 'CONFIRMED', transactionId: tx._id, confirmedAt: new Date() } }
         );
+        claimed = false;
 
         res.status(201).json({ message: 'تراکنش با موفقیت ثبت شد', transaction: tx });
     } catch (error) {
-        // اگر ساخت تراکنش شکست خورد، به صف برگردان تا کاربر دوباره تلاش کند
         if (claimed) {
-            await SmsImport.updateOne({ _id: id, userId, status: 'CONFIRMING' }, { $set: { status: 'PENDING' } }).catch(() => {});
+            try {
+                // اگر تراکنش واقعاً ساخته شده، نباید به صف برگردد (وگرنه تکراری می‌شود)
+                const txExists = txId ? await Transaction.exists({ _id: txId, userId }) : null;
+                if (txExists) {
+                    await SmsImport.updateOne(
+                        { _id: id, userId, status: 'CONFIRMING' },
+                        { $set: { status: 'CONFIRMED', transactionId: txId, confirmedAt: new Date() } }
+                    );
+                } else {
+                    await SmsImport.updateOne(
+                        { _id: id, userId, status: 'CONFIRMING' },
+                        { $set: { status: 'PENDING', transactionId: null } }
+                    );
+                }
+            } catch (rollbackErr) {
+                // در بدترین حالت CONFIRMING می‌ماند و بعد از STALE_CLAIM_MS با همان txId دوباره قابل تلاش است
+                console.error('[sms:confirm:rollback]', rollbackErr);
+            }
         }
-        res.status(500).json({ message: 'خطای سرور', error: error.message });
+        serverError(res, 'confirm', error);
     }
 };
 
@@ -317,6 +372,6 @@ exports.rejectSms = async (req, res) => {
 
         res.status(200).json({ message: 'مورد رد شد' });
     } catch (error) {
-        res.status(500).json({ message: 'خطای سرور', error: error.message });
+        serverError(res, 'reject', error);
     }
 };
