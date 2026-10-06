@@ -469,6 +469,21 @@ exports.updateTransaction = async (req, res) => {
             return res.status(400).json({ message: 'مبلغ باید بیشتر از صفر باشد' });
         }
 
+        // تراکنش انتقالی: مبلغ و کارت قابل تغییر نیست (برای جلوگیری از ناهماهنگی دو سمت)
+        const existing = await Transaction.findOne({ _id: id, userId: req.user.id })
+            .select('transferId')
+            .lean();
+
+        if (!existing) {
+            return res.status(404).json({ message: 'تراکنش مورد نظر یافت نشد' });
+        }
+
+        if (existing.transferId && (amount !== undefined || cardId !== undefined)) {
+            return res.status(400).json({
+                message: 'مبلغ و کارت انتقال قابل ویرایش نیست؛ انتقال را حذف و دوباره ثبت کن'
+            });
+        }
+
         const updateFields = {};
         if (amount !== undefined) updateFields.amount = amount;
         if (title !== undefined) updateFields.title = title;
@@ -510,10 +525,6 @@ exports.updateTransaction = async (req, res) => {
             { new: true, runValidators: true }
         );
 
-        if (!updatedTx) {
-            return res.status(404).json({ message: 'تراکنش مورد نظر یافت نشد' });
-        }
-
         res.status(200).json({ message: 'تراکنش با موفقیت ویرایش شد', transaction: updatedTx });
     } catch (error) {
         res.status(500).json({ message: 'خطای سرور', error: error.message });
@@ -534,7 +545,10 @@ exports.deleteTransaction = async (req, res) => {
             return res.status(404).json({ message: 'تراکنش مورد نظر یافت نشد' });
         }
 
-        if (transaction.type === 'LOAN') {
+        // حذف هر دو سمت انتقال
+        if (transaction.transferId) {
+            await Transaction.deleteMany({ transferId: transaction.transferId, userId: req.user.id });
+        } else if (transaction.type === 'LOAN') {
             await Transaction.deleteMany({ loanId: transaction._id, userId: req.user.id });
         }
 
