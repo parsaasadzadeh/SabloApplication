@@ -32,6 +32,7 @@ const transactionSchema = new mongoose.Schema({
         ref: 'Goal',
         default: null
     },
+    transferId: { type: mongoose.Schema.Types.ObjectId, default: null, index: true },
     dueDate: { type: Date }, // تاریخ سررسید قسط یا یادآوری وام
     isPaid: { type: Boolean, default: false }, //وضعیت پرداخت (مخصوص اقساط)
     
