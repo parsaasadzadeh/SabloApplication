@@ -93,29 +93,6 @@ const computeFinanceSummary = async (userId, from, to, cardId = null) => {
         unpaidInstallmentsAmount: unpaid.totalRemaining
     };
 };
-    const rawTotals = stats[0].totals;
-    const unpaid = stats[0].unpaidInstallments[0] || { totalRemaining: 0, count: 0 };
-    let income = 0, expense = 0, loans = 0, installmentsPaid = 0, goalDeposits = 0;
-
-    rawTotals.forEach(item => {
-        if (item._id === 'INCOME') income = item.totalAmount;
-        if (item._id === 'EXPENSE') expense = item.totalAmount;
-        if (item._id === 'LOAN') loans = item.totalAmount;
-        if (item._id === 'INSTALLMENT') installmentsPaid = item.totalAmount;
-        if (item._id === 'GOAL_DEPOSIT') goalDeposits = item.totalAmount;
-    });
-
-    return {
-        totalIncome: income,
-        totalExpense: expense,
-        totalGoalDeposits: goalDeposits,
-        activeDebt: unpaid.totalRemaining,
-        cashBalance: (income + loans) - (expense + installmentsPaid + goalDeposits),
-        unpaidInstallmentsCount: unpaid.count,
-        unpaidInstallmentsAmount: unpaid.totalRemaining
-    };
-};
-
 
 
 
