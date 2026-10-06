@@ -67,6 +67,35 @@ const computeFinanceSummary = async (userId, from, to, cardId = null) => {
     const rawTotals = stats[0].totals;
     const unpaid = stats[0].unpaidInstallments[0] || { totalRemaining: 0, count: 0 };
     let income = 0, expense = 0, loans = 0, installmentsPaid = 0, goalDeposits = 0;
+    let transferIn = 0, transferOut = 0;
+
+    rawTotals.forEach(item => {
+        if (item._id === 'INCOME') income = item.totalAmount;
+        if (item._id === 'EXPENSE') expense = item.totalAmount;
+        if (item._id === 'LOAN') loans = item.totalAmount;
+        if (item._id === 'INSTALLMENT') installmentsPaid = item.totalAmount;
+        if (item._id === 'GOAL_DEPOSIT') goalDeposits = item.totalAmount;
+        if (item._id === 'TRANSFER_IN') transferIn = item.totalAmount;
+        if (item._id === 'TRANSFER_OUT') transferOut = item.totalAmount;
+    });
+
+    return {
+        totalIncome: income,
+        totalExpense: expense,
+        totalGoalDeposits: goalDeposits,
+        totalTransferIn: transferIn,
+        totalTransferOut: transferOut,
+        activeDebt: unpaid.totalRemaining,
+        cashBalance:
+            (income + loans + transferIn) -
+            (expense + installmentsPaid + goalDeposits + transferOut),
+        unpaidInstallmentsCount: unpaid.count,
+        unpaidInstallmentsAmount: unpaid.totalRemaining
+    };
+};
+    const rawTotals = stats[0].totals;
+    const unpaid = stats[0].unpaidInstallments[0] || { totalRemaining: 0, count: 0 };
+    let income = 0, expense = 0, loans = 0, installmentsPaid = 0, goalDeposits = 0;
 
     rawTotals.forEach(item => {
         if (item._id === 'INCOME') income = item.totalAmount;
@@ -691,7 +720,7 @@ exports.exportTransactionsCSV = async (req, res) => {
 exports.getMonthlyOverview = async (req, res) => {
     try {
         const userId = new mongoose.Types.ObjectId(req.user.id);
-        const monthsCount = Math.min(parseInt(req.query.months) || 6, 24);
+        const monthsCount = Math.min(Math.max(parseInt(req.query.months) || 6, 1), 24);
 
         const now = new Date();
         const startRange = new Date(now.getFullYear(), now.getMonth() - (monthsCount - 1), 1);
@@ -700,7 +729,9 @@ exports.getMonthlyOverview = async (req, res) => {
 
         if (req.query.cardId) {
             const card = await Card.findOne({ _id: req.query.cardId, userId: req.user.id });
-            if (!card) return res.status(400).json({ message: 'کارت انتخاب‌شده معتبر نیست' });
+            if (!card) {
+                return res.status(400).json({ message: 'کارت انتخاب‌شده معتبر نیست' });
+            }
             matchBase.cardId = card._id;
         }
 
@@ -711,48 +742,63 @@ exports.getMonthlyOverview = async (req, res) => {
                     _id: {
                         year: { $year: '$date' },
                         month: { $month: '$date' },
-                        type: '$type'
+                        type: '$type',
                     },
                     totalAmount: {
                         $sum: {
                             $cond: [
                                 { $eq: ['$type', 'INSTALLMENT'] },
                                 { $cond: ['$isPaid', '$amount', 0] },
-                                '$amount'
-                            ]
-                        }
-                    }
-                }
-            }
+                                '$amount',
+                            ],
+                        },
+                    },
+                },
+            },
         ]);
 
-               const monthsMap = {};
-        stats.forEach(item => {
-            const key = `${item._id.year}-${item._id.month}`;
-            if (!monthsMap[key]) {
-                monthsMap[key] = { income: 0, expense: 0, loans: 0, installmentsPaid: 0, goalDeposits: 0 };
-            }
-            if (item._id.type === 'INCOME') monthsMap[key].income = item.totalAmount;
-            if (item._id.type === 'EXPENSE') monthsMap[key].expense = item.totalAmount;
-            if (item._id.type === 'LOAN') monthsMap[key].loans = item.totalAmount;
-            if (item._id.type === 'INSTALLMENT') monthsMap[key].installmentsPaid = item.totalAmount;
-            if (item._id.type === 'GOAL_DEPOSIT') monthsMap[key].goalDeposits = item.totalAmount;
+        // ── جمع مبالغ هر ماه به تفکیک نوع تراکنش ─────────────────────────
+        const emptyMonth = () => ({
+            INCOME: 0,
+            EXPENSE: 0,
+            LOAN: 0,
+            INSTALLMENT: 0,
+            GOAL_DEPOSIT: 0,
+            TRANSFER_IN: 0,
+            TRANSFER_OUT: 0,
         });
 
-                const result = [];
+        const monthsMap = {};
+        stats.forEach(item => {
+            const { year, month, type } = item._id;
+            const key = `${year}-${month}`;
+            if (!monthsMap[key]) monthsMap[key] = emptyMonth();
+            if (type in monthsMap[key]) {
+                monthsMap[key][type] = item.totalAmount;
+            }
+        });
+
+        // ── ساخت خروجی ماه‌به‌ماه ────────────────────────────────────────
+        const result = [];
         for (let i = 0; i < monthsCount; i++) {
             const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
             const key = `${d.getFullYear()}-${d.getMonth() + 1}`;
-            const data = monthsMap[key] || { income: 0, expense: 0, loans: 0, installmentsPaid: 0, goalDeposits: 0 };
+            const data = monthsMap[key] || emptyMonth();
+
+            const moneyIn = data.INCOME + data.LOAN + data.TRANSFER_IN;
+            const moneyOut =
+                data.EXPENSE + data.INSTALLMENT + data.GOAL_DEPOSIT + data.TRANSFER_OUT;
 
             result.push({
                 year: d.getFullYear(),
                 month: d.getMonth() + 1,
                 from: new Date(d.getFullYear(), d.getMonth(), 1),
                 to: new Date(d.getFullYear(), d.getMonth() + 1, 0, 23, 59, 59),
-                income: data.income,
-                expense: data.expense,
-                balance: (data.income + data.loans) - (data.expense + data.installmentsPaid + data.goalDeposits)
+                income: data.INCOME,
+                expense: data.EXPENSE,
+                transferIn: data.TRANSFER_IN,
+                transferOut: data.TRANSFER_OUT,
+                balance: moneyIn - moneyOut,
             });
         }
 
