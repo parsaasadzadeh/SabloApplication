@@ -18,7 +18,8 @@ const {
     getLoans, 
     getUnpaidInstallments  , 
     calculateDong , 
-    saveDongAsExpense
+    saveDongAsExpense,
+    createTransfer
 } = require('../controllers/financeController');
 const sms = require('../controllers/smsImportController');
 const { protect } = require('../middlewares/authMiddleware');
@@ -52,6 +53,9 @@ router.post('/sms/import', protect, sms.importSms);
 router.get('/sms/pending', protect, sms.getPendingSms);
 router.post('/sms/:id/confirm', protect, sms.confirmSms);
 router.post('/sms/:id/reject', protect, sms.rejectSms);
+
+//انتقال
+router.post('/transfer',protect, createTransfer);
 module.exports = router;
 
 
