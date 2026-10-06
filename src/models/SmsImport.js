@@ -2,7 +2,12 @@
 // پیامک‌های بانکی که فرانت پارس کرده و فرستاده؛ تا وقتی کاربر تأیید نکرده
 // داخل Transaction نمی‌روند، پس روی آمار و موجودی هیچ اثری ندارند.
 // متن خام پیامک هرگز ذخیره نمی‌شود، فقط hash آن (برای جلوگیری از ثبت تکراری).
+// رکوردها بر اساس تاریخ پیامک بعد از RETENTION_DAYS روز خودکار پاک می‌شوند.
 const mongoose = require('mongoose');
+
+// باید از MAX_AGE_DAYS در کنترلر (پنجره‌ی پذیرش پیامک) بزرگ‌تر باشد،
+// تا پیامک پاک‌شده هرگز دوباره قابل ارسال نباشد.
+const RETENTION_DAYS = 35;
 
 const smsImportSchema = new mongoose.Schema(
     {
@@ -31,6 +36,7 @@ const smsImportSchema = new mongoose.Schema(
         // شبیه به یک تراکنش دستی موجود؛ فقط هشدار، نه حذف خودکار
         possibleDuplicateOf: { type: mongoose.Schema.Types.ObjectId, ref: 'Transaction', default: null },
 
+        // در مرحله‌ی claim از قبل مقداردهی می‌شود تا تأیید ناقص باعث تراکنش تکراری نشود
         transactionId: { type: mongoose.Schema.Types.ObjectId, ref: 'Transaction', default: null },
         parserVersion: { type: Number, default: 1 },
         confirmedAt: { type: Date, default: null },
@@ -43,4 +49,10 @@ const smsImportSchema = new mongoose.Schema(
 smsImportSchema.index({ userId: 1, smsHash: 1 }, { unique: true });
 smsImportSchema.index({ userId: 1, status: 1, date: -1 });
 
-module.exports = mongoose.model('SmsImport', smsImportSchema);
+// پاک‌سازی خودکار (TTL باید روی ایندکس تک‌فیلدی باشد)
+smsImportSchema.index({ date: 1 }, { expireAfterSeconds: RETENTION_DAYS * 24 * 60 * 60 });
+
+const SmsImport = mongoose.model('SmsImport', smsImportSchema);
+SmsImport.RETENTION_DAYS = RETENTION_DAYS;
+
+module.exports = SmsImport;
