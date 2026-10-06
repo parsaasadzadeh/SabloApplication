@@ -1037,3 +1037,80 @@ exports.saveDongAsExpense = async (req, res) => {
         res.status(500).json({ message: 'خطای سرور', error: error.message });
     }
 };
+
+
+
+
+// ---------------------------------------------------------------------
+// انتقال بین دو کارت
+// ---------------------------------------------------------------------
+exports.createTransfer = async (req, res) => {
+    try {
+        const { fromCardId, toCardId, amount, description, date } = req.body;
+        const userId = req.user.id;
+
+        if (!Number.isInteger(amount) || amount <= 0) {
+            return res.status(400).json({ message: 'مبلغ انتقال باید عدد صحیح و بیشتر از صفر باشد' });
+        }
+        if (!fromCardId || !toCardId) {
+            return res.status(400).json({ message: 'کارت مبدا و مقصد الزامی است' });
+        }
+        if (String(fromCardId) === String(toCardId)) {
+            return res.status(400).json({ message: 'کارت مبدا و مقصد نمی‌تواند یکی باشد' });
+        }
+
+        let txDate = new Date();
+        if (date) {
+            const parsedDate = new Date(date);
+            if (isNaN(parsedDate.getTime())) {
+                return res.status(400).json({ message: 'تاریخ تراکنش نامعتبر است' });
+            }
+            if (parsedDate.getTime() > Date.now() + 24 * 60 * 60 * 1000) {
+                return res.status(400).json({ message: 'تاریخ تراکنش نمی‌تواند در آینده باشد' });
+            }
+            txDate = parsedDate;
+        }
+
+        const [fromCard, toCard] = await Promise.all([
+            Card.findOne({ _id: fromCardId, userId }).lean(),
+            Card.findOne({ _id: toCardId, userId }).lean(),
+        ]);
+        if (!fromCard || !toCard) {
+            return res.status(400).json({ message: 'کارت انتخاب‌شده معتبر نیست' });
+        }
+
+        const transferId = new mongoose.Types.ObjectId();
+        const cleanDesc = description?.trim() || '';
+
+        try {
+            const [outTx, inTx] = await Transaction.insertMany([
+                {
+                    userId, type: 'TRANSFER_OUT', amount,
+                    title: `انتقال به ${toCard.name}`,
+                    description: cleanDesc,
+                    date: txDate, cardId: fromCard._id,
+                    category: null, isPaid: true, transferId,
+                },
+                {
+                    userId, type: 'TRANSFER_IN', amount,
+                    title: `انتقال از ${fromCard.name}`,
+                    description: cleanDesc,
+                    date: txDate, cardId: toCard._id,
+                    category: null, isPaid: true, transferId,
+                },
+            ]);
+
+            res.status(201).json({
+                message: 'انتقال با موفقیت ثبت شد',
+                transfer: { transferId, amount, from: fromCard.name, to: toCard.name },
+                transactions: [outTx, inTx],
+            });
+        } catch (insertError) {
+            // جلوگیری از ثبت نیمه‌کاره
+            await Transaction.deleteMany({ transferId, userId });
+            throw insertError;
+        }
+    } catch (error) {
+        res.status(500).json({ message: 'خطای سرور', error: error.message });
+    }
+};
