@@ -17,6 +17,8 @@ const {
     createLoanWithInstallments,
     getLoans, 
     getUnpaidInstallments  , 
+    calculateDong , 
+    saveDongAsExpense,
     createTransfer
 } = require('../controllers/financeController');
 const sms = require('../controllers/smsImportController');
@@ -41,6 +43,11 @@ router.get('/unpaid-installments', getUnpaidInstallments);
 router.post('/loans/create', createLoanWithInstallments);
 router.get('/loans', getLoans);
 
+//ماشین حساب دنگ
+router.post('/dong/calculate', calculateDong);
+router.post('/dong/save', saveDongAsExpense);
+
+
 //بانک
 router.post('/sms/import', protect, sms.importSms);
 router.get('/sms/pending', protect, sms.getPendingSms);
@@ -50,5 +57,6 @@ router.post('/sms/:id/reject', protect, sms.rejectSms);
 //انتقال
 router.post('/transfer',protect, createTransfer);
 module.exports = router;
+
 
 
