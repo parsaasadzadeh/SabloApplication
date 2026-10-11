@@ -42,7 +42,6 @@ const transactionSchema = new mongoose.Schema({
 transactionSchema.index({ userId: 1, date: -1 });
 // جدید: برای سرعت محاسبه‌ی مجموع واریزهای هر هدف
 transactionSchema.index({ userId: 1, goalId: 1 });
-// برای کرون اقساط و لیست اقساط پرداخت‌نشده
-transactionSchema.index({ type: 1, isPaid: 1, dueDate: 1 });
 
 module.exports = mongoose.model('Transaction', transactionSchema);
+
