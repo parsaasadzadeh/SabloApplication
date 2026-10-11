@@ -1,83 +1,124 @@
+const mongoose = require('mongoose');
 const Transaction = require('../models/Transaction');
 const Category = require('../models/Category');
 const Card = require('../models/Card');
-const mongoose = require('mongoose');
 const CATEGORIES = require('../constants/categories');
-const { calculateDong } = require('../utils/dongCalculator');
-const MAX_CUSTOM_CATEGORIES_PER_USER = 30;
 
 // ---------------------------------------------------------------------
-// helper تاریخ
+// ثابت‌ها و سقف‌ها — برای جلوگیری از مصرف زیاد CPU/RAM
 // ---------------------------------------------------------------------
-const buildDateMatch = (from, to) => {
-    const dateMatch = {};
-    if (from || to) {
-        dateMatch.date = {};
-        if (from) dateMatch.date.$gte = new Date(from);
-        if (to) {
-            const toDate = new Date(to);
-            toDate.setHours(23, 59, 59, 999);
-            dateMatch.date.$lte = toDate;
-        }
-    }
-    return dateMatch;
+const MAX_CUSTOM_CATEGORIES_PER_USER = 30;
+const MAX_PAGE_SIZE = 50;
+const MAX_PAGE = 1000;
+const MAX_CSV_ROWS = 5000;
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+const PRESET_INFO = new Map(
+    CATEGORIES.map(c => [c.id, { label: c.label, icon: c.icon, isCustom: false }])
+);
+const FALLBACK_CATEGORY_INFO = { label: 'دسته‌بندی حذف‌شده', icon: '❓' };
+
+const TYPE_LABELS = {
+    INCOME: 'درآمد',
+    EXPENSE: 'خرج',
+    INSTALLMENT: 'قسط',
+    LOAN: 'وام',
+    GOAL_DEPOSIT: 'واریز به هدف',
+    TRANSFER_IN: 'انتقال ورودی',
+    TRANSFER_OUT: 'انتقال خروجی',
 };
 
 // ---------------------------------------------------------------------
-// helper خلاصه مالی — cardId اختیاریه
+// helperهای عمومی
 // ---------------------------------------------------------------------
-const computeFinanceSummary = async (userId, from, to, cardId = null) => {
-    const matchBase = {
-        userId: new mongoose.Types.ObjectId(userId),
-        ...buildDateMatch(from, to)
-    };
+const isId = (v) => mongoose.isValidObjectId(v);
+const oid = (v) => new mongoose.Types.ObjectId(v);
+const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const serverError = (res, error) =>
+    res.status(500).json({ message: 'خطای سرور', error: error.message });
 
-    if (cardId) {
-        matchBase.cardId = new mongoose.Types.ObjectId(cardId);
+const buildDateMatch = (from, to) => {
+    const range = {};
+    if (from) {
+        const d = new Date(from);
+        if (!isNaN(d.getTime())) range.$gte = d;
+    }
+    if (to) {
+        const d = new Date(to);
+        if (!isNaN(d.getTime())) {
+            d.setHours(23, 59, 59, 999);
+            range.$lte = d;
+        }
+    }
+    return Object.keys(range).length ? { date: range } : {};
+};
+
+// تاریخ تراکنش: null = نامعتبر، در غیر این صورت Date
+const parseTxDate = (value) => {
+    if (!value) return new Date();
+    const d = new Date(value);
+    if (isNaN(d.getTime()) || d.getTime() > Date.now() + DAY_MS) return null;
+    return d;
+};
+
+// فقط وقتی کارت نیاز باشه کوئری می‌زنه؛ null = کارت ندارد، throw = نامعتبر
+const resolveCardId = async (cardId, userId) => {
+    if (!cardId) return null;
+    if (!isId(cardId)) throw new Error('INVALID_CARD');
+    const card = await Card.exists({ _id: cardId, userId });
+    if (!card) throw new Error('INVALID_CARD');
+    return card._id;
+};
+
+// دسته‌بندی: پیش‌فرض‌ها بدون کوئری، شخصی‌ها فقط در صورت نیاز
+const resolveCategory = async (category, userId) => {
+    if (!category || typeof category !== 'string') return null;
+    if (PRESET_INFO.has(category)) return category;
+    const custom = await Category.exists({ id: category, userId });
+    return custom ? category : null;
+};
+
+// اطلاعات نمایشی دسته‌ها؛ فقط برای idهای غیرپیش‌فرض به دیتابیس می‌رود
+const loadCategoryInfo = async (userId, ids) => {
+    const map = new Map(PRESET_INFO);
+    const customIds = [...new Set(ids)].filter(id => id && !PRESET_INFO.has(id));
+    if (customIds.length) {
+        const customs = await Category.find({ userId, id: { $in: customIds } })
+            .select('id label icon').lean();
+        customs.forEach(c => map.set(c.id, { label: c.label, icon: c.icon, isCustom: true }));
+    }
+    return map;
+};
+
+const lookupCategoryInfo = (id, map) => {
+    if (!id) return null;
+    return map.get(id) || FALLBACK_CATEGORY_INFO;
+};
+
+// ---------------------------------------------------------------------
+// خلاصه مالی — فقط یک aggregate ساده (بدون $facet)
+// ---------------------------------------------------------------------
+const summaryFromRows = (rows) => {
+    const t = {};
+    let unpaidAmount = 0, unpaidCount = 0;
+
+    for (const r of rows) {
+        const { type, isPaid } = r._id;
+        if (type === 'INSTALLMENT') {
+            if (isPaid) t.INSTALLMENT = (t.INSTALLMENT || 0) + r.total;
+            else { unpaidAmount += r.total; unpaidCount += r.count; }
+        } else {
+            t[type] = (t[type] || 0) + r.total;
+        }
     }
 
-    const stats = await Transaction.aggregate([
-        { $match: matchBase },
-        {
-            $facet: {
-                totals: [
-                    {
-                        $group: {
-                            _id: '$type',
-                            totalAmount: {
-                                $sum: {
-                                    $cond: [
-                                        { $eq: ['$type', 'INSTALLMENT'] },
-                                        { $cond: ['$isPaid', '$amount', 0] },
-                                        '$amount'
-                                    ]
-                                }
-                            }
-                        }
-                    }
-                ],
-                unpaidInstallments: [
-                    { $match: { type: 'INSTALLMENT', isPaid: false } },
-                    { $group: { _id: null, totalRemaining: { $sum: '$amount' }, count: { $sum: 1 } } }
-                ]
-            }
-        }
-    ]);
-
-    const rawTotals = stats[0].totals;
-    const unpaid = stats[0].unpaidInstallments[0] || { totalRemaining: 0, count: 0 };
-    let income = 0, expense = 0, loans = 0, installmentsPaid = 0, goalDeposits = 0;
-    let transferIn = 0, transferOut = 0;
-
-    rawTotals.forEach(item => {
-        if (item._id === 'INCOME') income = item.totalAmount;
-        if (item._id === 'EXPENSE') expense = item.totalAmount;
-        if (item._id === 'LOAN') loans = item.totalAmount;
-        if (item._id === 'INSTALLMENT') installmentsPaid = item.totalAmount;
-        if (item._id === 'GOAL_DEPOSIT') goalDeposits = item.totalAmount;
-        if (item._id === 'TRANSFER_IN') transferIn = item.totalAmount;
-        if (item._id === 'TRANSFER_OUT') transferOut = item.totalAmount;
-    });
+    const income = t.INCOME || 0;
+    const expense = t.EXPENSE || 0;
+    const loans = t.LOAN || 0;
+    const goalDeposits = t.GOAL_DEPOSIT || 0;
+    const transferIn = t.TRANSFER_IN || 0;
+    const transferOut = t.TRANSFER_OUT || 0;
+    const installmentsPaid = t.INSTALLMENT || 0;
 
     return {
         totalIncome: income,
@@ -85,90 +126,73 @@ const computeFinanceSummary = async (userId, from, to, cardId = null) => {
         totalGoalDeposits: goalDeposits,
         totalTransferIn: transferIn,
         totalTransferOut: transferOut,
-        activeDebt: unpaid.totalRemaining,
-        cashBalance:
-            (income + loans + transferIn) -
-            (expense + installmentsPaid + goalDeposits + transferOut),
-        unpaidInstallmentsCount: unpaid.count,
-        unpaidInstallmentsAmount: unpaid.totalRemaining
+        activeDebt: unpaidAmount,
+        cashBalance: (income + loans + transferIn) - (expense + installmentsPaid + goalDeposits + transferOut),
+        unpaidInstallmentsCount: unpaidCount,
+        unpaidInstallmentsAmount: unpaidAmount,
     };
 };
 
+const SUMMARY_GROUP = {
+    $group: {
+        _id: { type: '$type', isPaid: '$isPaid' },
+        total: { $sum: '$amount' },
+        count: { $sum: 1 },
+    },
+};
 
+const computeFinanceSummary = async (userId, from, to, cardId = null) => {
+    const match = { userId: oid(userId), ...buildDateMatch(from, to) };
+    if (cardId) match.cardId = oid(cardId);
+    const rows = await Transaction.aggregate([{ $match: match }, SUMMARY_GROUP]);
+    return summaryFromRows(rows);
+};
 
-// ---------------------------------------------------------------------
-// helper اعتبارسنجی کارت — null برگردوندن = کارت نداره (مجاز)
-// throw = کارت نامعتبره
-// ---------------------------------------------------------------------
+// استفاده توسط aiController
+exports.calculateUserStats = (userId) => computeFinanceSummary(userId);
 
-const resolveCardId = async (cardId, userId) => {
-    if (!cardId) return null;
-    const card = await Card.findOne({ _id: cardId, userId });
-    if (!card) throw new Error('INVALID_CARD');
-    return card._id;
+exports.getFinanceStats = async (req, res) => {
+    try {
+        const { from, to, cardId } = req.query;
+        if (cardId) {
+            if (!isId(cardId) || !(await Card.exists({ _id: cardId, userId: req.user.id }))) {
+                return res.status(400).json({ message: 'کارت انتخاب‌شده معتبر نیست' });
+            }
+        }
+        const summary = await computeFinanceSummary(req.user.id, from, to, cardId || null);
+        res.status(200).json({ summary });
+    } catch (error) {
+        serverError(res, error);
+    }
 };
 
 // ---------------------------------------------------------------------
-// helperهای دسته‌بندی
+// ثبت تراکنش
 // ---------------------------------------------------------------------
-
-const getUserCategoryMap = async (userId) => {
-    const customCats = await Category.find({ userId }).lean();
-    const map = new Map();
-    CATEGORIES.forEach(c => map.set(c.id, { label: c.label, icon: c.icon, isCustom: false }));
-    customCats.forEach(c => map.set(c.id, { label: c.label, icon: c.icon, isCustom: true }));
-    return map;
-};
-
-const resolveCategoryId = (category, categoryMap) => {
-    if (!category) return null;
-    return categoryMap.has(category) ? category : null;
-};
-
-const FALLBACK_CATEGORY_INFO = { label: 'دسته‌بندی حذف‌شده', icon: '❓' };
-const lookupCategoryInfo = (categoryId, categoryMap) => {
-    if (!categoryId) return null;
-    return categoryMap.get(categoryId) || FALLBACK_CATEGORY_INFO;
-};
-
-// ---------------------------------------------------------------------
-// ثبت تراکنش جدید
-// ---------------------------------------------------------------------
-
 exports.addTransaction = async (req, res) => {
     try {
         const { type, amount, title, description, dueDate, loanId, category, date, cardId } = req.body;
 
-        if (amount <= 0) {
+        if (!(amount > 0)) {
             return res.status(400).json({ message: 'مبلغ باید بیشتر از صفر باشد' });
         }
         if (type === 'GOAL_DEPOSIT') {
             return res.status(400).json({ message: 'این نوع تراکنش فقط از طریق واریز به هدف قابل ثبت است' });
         }
 
-
-        let txDate = new Date();
-        if (date) {
-            const parsedDate = new Date(date);
-            if (isNaN(parsedDate.getTime())) {
-                return res.status(400).json({ message: 'تاریخ تراکنش نامعتبر است' });
-            }
-            const oneDayMs = 24 * 60 * 60 * 1000;
-            if (parsedDate.getTime() > Date.now() + oneDayMs) {
-                return res.status(400).json({ message: 'تاریخ تراکنش نمی‌تواند در آینده باشد' });
-            }
-            txDate = parsedDate;
+        const txDate = parseTxDate(date);
+        if (!txDate) {
+            return res.status(400).json({ message: 'تاریخ تراکنش نامعتبر است یا در آینده است' });
         }
 
-        const categoryMap = await getUserCategoryMap(req.user.id);
-        const resolvedCategory = resolveCategoryId(category, categoryMap);
-
-        let resolvedCardId = null;
+        let resolvedCardId;
         try {
             resolvedCardId = await resolveCardId(cardId, req.user.id);
         } catch {
             return res.status(400).json({ message: 'کارت انتخاب‌شده معتبر نیست' });
         }
+
+        const resolvedCategory = await resolveCategory(category, req.user.id);
 
         const newTx = await Transaction.create({
             userId: req.user.id,
@@ -180,157 +204,112 @@ exports.addTransaction = async (req, res) => {
             date: txDate,
             category: resolvedCategory,
             cardId: resolvedCardId,
-            loanId: loanId ? new mongoose.Types.ObjectId(loanId) : null,
-            isPaid: ['LOAN', 'INCOME', 'EXPENSE'].includes(type) ? true : false
+            loanId: loanId && isId(loanId) ? oid(loanId) : null,
+            isPaid: ['LOAN', 'INCOME', 'EXPENSE'].includes(type),
         });
 
         res.status(201).json({ message: 'تراکنش با موفقیت ثبت شد', transaction: newTx });
     } catch (error) {
-        res.status(500).json({ message: 'خطای سرور', error: error.message });
+        serverError(res, error);
     }
 };
 
 // ---------------------------------------------------------------------
-// لیست تراکنش‌ها — فیلتر کارت اضافه شد
+// ساخت فیلتر مشترک لیست و CSV — null برگردد یعنی cardId نامعتبر
 // ---------------------------------------------------------------------
+const buildListFilter = (req) => {
+    const filter = { userId: req.user.id, ...buildDateMatch(req.query.from, req.query.to) };
 
+    const { cardId } = req.query;
+    if (cardId === 'none') filter.cardId = null;
+    else if (cardId) {
+        if (!isId(cardId)) return null;
+        filter.cardId = oid(cardId);
+    }
+
+    const search = typeof req.query.search === 'string' ? req.query.search.trim().slice(0, 50) : '';
+    if (search) {
+        const rx = { $regex: escapeRegex(search), $options: 'i' };
+        filter.$or = [{ title: rx }, { description: rx }];
+    }
+
+    if (typeof req.query.type === 'string' && req.query.type) filter.type = req.query.type;
+    return filter;
+};
+
+// ---------------------------------------------------------------------
+// لیست تراکنش‌ها (صفحه‌بندی با سقف)
+// ---------------------------------------------------------------------
 exports.getMyTransactions = async (req, res) => {
     try {
-        const page = parseInt(req.query.page) || 1;
-        const limit = parseInt(req.query.limit) || 10;
-        const skip = (page - 1) * limit;
-        const search = req.query.search?.trim();
-        const fromDate = req.query.from;
-        const toDate = req.query.to;
+        const page = Math.min(Math.max(parseInt(req.query.page) || 1, 1), MAX_PAGE);
+        const limit = Math.min(Math.max(parseInt(req.query.limit) || 10, 1), MAX_PAGE_SIZE);
 
-        const filter = { userId: req.user.id, ...buildDateMatch(fromDate, toDate) };
+        const filter = buildListFilter(req);
+        if (!filter) return res.status(400).json({ message: 'کارت انتخاب‌شده معتبر نیست' });
 
-        if (req.query.cardId === 'none') {
-            filter.cardId = null;
-        } else if (req.query.cardId) {
-            filter.cardId = new mongoose.Types.ObjectId(req.query.cardId);
-        }
-
-        if (search) {
-            filter.$or = [
-                { title: { $regex: search, $options: 'i' } },
-                { description: { $regex: search, $options: 'i' } },
-            ];
-        }
-        if (req.query.type) {
-  filter.type = req.query.type;
-}
-
-        const [transactions, totalTransactions, categoryMap] = await Promise.all([
-            Transaction.find(filter).sort({ date: -1 }).skip(skip).limit(limit),
+        const [transactions, totalItems] = await Promise.all([
+            Transaction.find(filter).sort({ date: -1 }).skip((page - 1) * limit).limit(limit).lean(),
             Transaction.countDocuments(filter),
-            getUserCategoryMap(req.user.id),
         ]);
 
-        const enriched = transactions.map(tx => {
-            const txObj = tx.toObject();
-            const info = lookupCategoryInfo(txObj.category, categoryMap);
-            txObj.categoryInfo = info ? { id: txObj.category, ...info } : null;
-            return txObj;
-        });
+        const categoryMap = await loadCategoryInfo(req.user.id, transactions.map(t => t.category));
+        for (const tx of transactions) {
+            const info = lookupCategoryInfo(tx.category, categoryMap);
+            tx.categoryInfo = info ? { id: tx.category, ...info } : null;
+        }
 
         res.status(200).json({
             currentPage: page,
-            totalPages: Math.ceil(totalTransactions / limit),
-            totalItems: totalTransactions,
-            transactions: enriched,
+            totalPages: Math.ceil(totalItems / limit),
+            totalItems,
+            transactions,
         });
     } catch (error) {
-        res.status(500).json({ message: 'خطای سرور', error: error.message });
+        serverError(res, error);
     }
 };
 
 // ---------------------------------------------------------------------
-// تحلیل‌گر هوش مصنوعی
+// آمار دسته‌بندی
 // ---------------------------------------------------------------------
-
-exports.calculateUserStats = async (userId) => {
-    return computeFinanceSummary(userId);
-};
-
-// ---------------------------------------------------------------------
-// خلاصه مالی — cardId اختیاری
-// ---------------------------------------------------------------------
-
-exports.getFinanceStats = async (req, res) => {
-    try {
-        const { from, to, cardId } = req.query;
-
-        if (cardId) {
-            const card = await Card.findOne({ _id: cardId, userId: req.user.id });
-            if (!card) {
-                return res.status(400).json({ message: 'کارت انتخاب‌شده معتبر نیست' });
-            }
-        }
-
-        const summary = await computeFinanceSummary(req.user.id, from, to, cardId || null);
-        res.status(200).json({ summary });
-    } catch (error) {
-        res.status(500).json({ message: 'خطای سرور', error: error.message });
-    }
-};
-
-// ---------------------------------------------------------------------
-// نمودار دایره‌ای دسته‌بندی — cardId اختیاری
-// ---------------------------------------------------------------------
-
 exports.getCategoryStats = async (req, res) => {
     try {
-        const userId = new mongoose.Types.ObjectId(req.user.id);
         const { type, from, to, cardId } = req.query;
-        const dateMatch = buildDateMatch(from, to);
-
-        const baseMatch = { userId, ...dateMatch };
+        const base = { userId: oid(req.user.id), ...buildDateMatch(from, to) };
 
         if (cardId) {
-            const card = await Card.findOne({ _id: cardId, userId: req.user.id });
-            if (!card) return res.status(400).json({ message: 'کارت انتخاب‌شده معتبر نیست' });
-            baseMatch.cardId = card._id;
+            if (!isId(cardId) || !(await Card.exists({ _id: cardId, userId: req.user.id }))) {
+                return res.status(400).json({ message: 'کارت انتخاب‌شده معتبر نیست' });
+            }
+            base.cardId = oid(cardId);
         }
 
         if (type === 'INCOME') {
-            const incomeAgg = await Transaction.aggregate([
-                { $match: { ...baseMatch, type: 'INCOME' } },
-                { $group: { _id: null, totalAmount: { $sum: '$amount' }, count: { $sum: 1 } } }
+            const [agg] = await Transaction.aggregate([
+                { $match: { ...base, type: 'INCOME' } },
+                { $group: { _id: null, totalAmount: { $sum: '$amount' }, count: { $sum: 1 } } },
             ]);
-            const income = incomeAgg[0] || { totalAmount: 0, count: 0 };
-            const categories = income.totalAmount > 0 ? [{
-                id: 'INCOME',
-                label: 'درآمد',
-                icon: '💰',
-                totalAmount: income.totalAmount,
-                count: income.count,
-                percentage: 100
-            }] : [];
-            return res.status(200).json({ total: income.totalAmount, categories });
+            const total = agg ? agg.totalAmount : 0;
+            const categories = total > 0
+                ? [{ id: 'INCOME', label: 'درآمد', icon: '💰', totalAmount: total, count: agg.count, percentage: 100 }]
+                : [];
+            return res.status(200).json({ total, categories });
         }
 
-        const match = { ...baseMatch, category: { $ne: null, $exists: true } };
+        const match = { ...base, category: { $ne: null } };
         if (type) match.type = type;
 
-        const [stats, categoryMap] = await Promise.all([
-            Transaction.aggregate([
-                { $match: match },
-                {
-                    $group: {
-                        _id: '$category',
-                        totalAmount: { $sum: '$amount' },
-                        count: { $sum: 1 }
-                    }
-                },
-                { $sort: { totalAmount: -1 } }
-            ]),
-            getUserCategoryMap(req.user.id),
+        const stats = await Transaction.aggregate([
+            { $match: match },
+            { $group: { _id: '$category', totalAmount: { $sum: '$amount' }, count: { $sum: 1 } } },
+            { $sort: { totalAmount: -1 } },
         ]);
 
-        const total = stats.reduce((sum, item) => sum + item.totalAmount, 0);
+        const categoryMap = await loadCategoryInfo(req.user.id, stats.map(s => s._id));
+        const total = stats.reduce((sum, s) => sum + s.totalAmount, 0);
 
-        const result = stats.map(item => {
+        const categories = stats.map(item => {
             const info = lookupCategoryInfo(item._id, categoryMap) || FALLBACK_CATEGORY_INFO;
             return {
                 id: item._id,
@@ -338,28 +317,27 @@ exports.getCategoryStats = async (req, res) => {
                 icon: info.icon,
                 totalAmount: item.totalAmount,
                 count: item.count,
-                percentage: total > 0 ? Math.round((item.totalAmount / total) * 100) : 0
+                percentage: total > 0 ? Math.round((item.totalAmount / total) * 100) : 0,
             };
         });
 
-        res.status(200).json({ total, categories: result });
+        res.status(200).json({ total, categories });
     } catch (error) {
-        res.status(500).json({ message: 'خطای سرور', error: error.message });
+        serverError(res, error);
     }
 };
 
 // ---------------------------------------------------------------------
 // دسته‌بندی‌ها
 // ---------------------------------------------------------------------
-
 exports.getCategories = async (req, res) => {
     try {
-        const customCats = await Category.find({ userId: req.user.id }).lean();
+        const customs = await Category.find({ userId: req.user.id }).select('id label icon').lean();
         const presets = CATEGORIES.map(c => ({ ...c, isCustom: false }));
-        const custom = customCats.map(c => ({ id: c.id, label: c.label, icon: c.icon, isCustom: true }));
+        const custom = customs.map(c => ({ id: c.id, label: c.label, icon: c.icon, isCustom: true }));
         res.status(200).json({ categories: [...presets, ...custom] });
     } catch (error) {
-        res.status(500).json({ message: 'خطای سرور', error: error.message });
+        serverError(res, error);
     }
 };
 
@@ -375,20 +353,17 @@ exports.addCustomCategory = async (req, res) => {
             return res.status(400).json({ message: 'نام دسته‌بندی خیلی طولانی است' });
         }
 
-        const existingCount = await Category.countDocuments({ userId: req.user.id });
-        if (existingCount >= MAX_CUSTOM_CATEGORIES_PER_USER) {
+        // یک کوئری برای هم شمارش و هم تکراری‌بودن (حداکثر ۳۰ سند)
+        const existing = await Category.find({ userId: req.user.id }).select('label').lean();
+        if (existing.length >= MAX_CUSTOM_CATEGORIES_PER_USER) {
             return res.status(400).json({ message: `حداکثر ${MAX_CUSTOM_CATEGORIES_PER_USER} دسته‌بندی شخصی مجاز است` });
         }
-
-        const duplicate = await Category.findOne({
-            userId: req.user.id,
-            label: { $regex: `^${trimmedLabel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, $options: 'i' }
-        });
-        if (duplicate) {
+        const lower = trimmedLabel.toLowerCase();
+        if (existing.some(c => String(c.label).toLowerCase() === lower)) {
             return res.status(400).json({ message: 'این دسته‌بندی از قبل وجود دارد' });
         }
 
-        const newCategory = await Category.create({
+        const created = await Category.create({
             userId: req.user.id,
             id: new mongoose.Types.ObjectId().toHexString(),
             label: trimmedLabel,
@@ -397,337 +372,288 @@ exports.addCustomCategory = async (req, res) => {
 
         res.status(201).json({
             message: 'دسته‌بندی با موفقیت ساخته شد',
-            category: { id: newCategory.id, label: newCategory.label, icon: newCategory.icon, isCustom: true }
+            category: { id: created.id, label: created.label, icon: created.icon, isCustom: true },
         });
     } catch (error) {
-        res.status(500).json({ message: 'خطای سرور', error: error.message });
+        serverError(res, error);
     }
 };
 
 exports.deleteCustomCategory = async (req, res) => {
     try {
-        const { id } = req.params;
-        const deleted = await Category.findOneAndDelete({ id, userId: req.user.id });
-
+        const deleted = await Category.findOneAndDelete({ id: req.params.id, userId: req.user.id }).select('_id').lean();
         if (!deleted) {
             return res.status(404).json({ message: 'دسته‌بندی مورد نظر یافت نشد' });
         }
-
         res.status(200).json({ message: 'دسته‌بندی با موفقیت حذف شد' });
     } catch (error) {
-        res.status(500).json({ message: 'خطای سرور', error: error.message });
+        serverError(res, error);
     }
 };
 
 // ---------------------------------------------------------------------
-// پرداخت قسط
+// پرداخت قسط (atomic)
 // ---------------------------------------------------------------------
 exports.payInstallment = async (req, res) => {
     try {
         const installmentId = req.params.id;
+        if (!isId(installmentId)) {
+            return res.status(404).json({ message: 'قسط مورد نظر یافت نشد' });
+        }
+
+        const update = { isPaid: true, date: new Date() };
         const { cardId } = req.body;
-
-        const updateFields = { isPaid: true, date: Date.now() };
-
         if (cardId !== undefined) {
-            if (cardId === null) {
-                updateFields.cardId = null;
-            } else {
-                try {
-                    updateFields.cardId = await resolveCardId(cardId, req.user.id);
-                } catch {
-                    return res.status(400).json({ message: 'کارت انتخاب‌شده معتبر نیست' });
-                }
+            try {
+                update.cardId = await resolveCardId(cardId, req.user.id);
+            } catch {
+                return res.status(400).json({ message: 'کارت انتخاب‌شده معتبر نیست' });
             }
         }
 
-        // ✅ شرط isPaid:false مستقیم تو همین کوئری — این atomic بودنشه
-        const updatedInstallment = await Transaction.findOneAndUpdate(
+        const updated = await Transaction.findOneAndUpdate(
             { _id: installmentId, userId: req.user.id, type: 'INSTALLMENT', isPaid: false },
-            updateFields,
+            update,
             { new: true }
-        );
+        ).lean();
 
-        // اگه چیزی برنگشت، یا اصلاً وجود نداره یا قبلاً پرداخت شده — این یکی رو جدا چک می‌کنیم فقط برای پیام درست
-        if (!updatedInstallment) {
-            const exists = await Transaction.findOne({ _id: installmentId, userId: req.user.id, type: 'INSTALLMENT' });
-            if (!exists) {
-                return res.status(404).json({ message: 'قسط مورد نظر یافت نشد' });
-            }
+        if (!updated) {
+            const exists = await Transaction.exists({ _id: installmentId, userId: req.user.id, type: 'INSTALLMENT' });
+            if (!exists) return res.status(404).json({ message: 'قسط مورد نظر یافت نشد' });
             return res.status(400).json({ message: 'این قسط قبلاً پرداخت شده است' });
         }
 
-        res.status(200).json({ message: 'قسط با موفقیت پرداخت شد', installment: updatedInstallment });
+        res.status(200).json({ message: 'قسط با موفقیت پرداخت شد', installment: updated });
     } catch (error) {
-        res.status(500).json({ message: 'خطای سرور', error: error.message });
+        serverError(res, error);
     }
 };
-// ---------------------------------------------------------------------
-// ویرایش تراکنش — cardId اضافه شد
-// ---------------------------------------------------------------------
 
+// ---------------------------------------------------------------------
+// ویرایش تراکنش — بدون کوئری اضافه؛ قفل تراکنش انتقال داخل خود فیلتر است
+// ---------------------------------------------------------------------
 exports.updateTransaction = async (req, res) => {
     try {
         const { id } = req.params;
-        const { amount, title, description, dueDate, category, date, cardId } = req.body;
-
-        if (amount !== undefined && amount <= 0) {
-            return res.status(400).json({ message: 'مبلغ باید بیشتر از صفر باشد' });
-        }
-
-        // تراکنش انتقالی: مبلغ و کارت قابل تغییر نیست (برای جلوگیری از ناهماهنگی دو سمت)
-        const existing = await Transaction.findOne({ _id: id, userId: req.user.id })
-            .select('transferId')
-            .lean();
-
-        if (!existing) {
+        if (!isId(id)) {
             return res.status(404).json({ message: 'تراکنش مورد نظر یافت نشد' });
         }
 
-        if (existing.transferId && (amount !== undefined || cardId !== undefined)) {
-            return res.status(400).json({
-                message: 'مبلغ و کارت انتقال قابل ویرایش نیست؛ انتقال را حذف و دوباره ثبت کن'
-            });
+        const { amount, title, description, dueDate, category, date, cardId } = req.body;
+
+        if (amount !== undefined && !(amount > 0)) {
+            return res.status(400).json({ message: 'مبلغ باید بیشتر از صفر باشد' });
         }
 
-        const updateFields = {};
-        if (amount !== undefined) updateFields.amount = amount;
-        if (title !== undefined) updateFields.title = title;
-        if (description !== undefined) updateFields.description = description;
-        if (dueDate !== undefined) updateFields.dueDate = dueDate;
+        const update = {};
+        if (amount !== undefined) update.amount = amount;
+        if (title !== undefined) update.title = title;
+        if (description !== undefined) update.description = description;
+        if (dueDate !== undefined) update.dueDate = dueDate;
 
         if (category !== undefined) {
-            const categoryMap = await getUserCategoryMap(req.user.id);
-            updateFields.category = resolveCategoryId(category, categoryMap);
+            update.category = await resolveCategory(category, req.user.id);
         }
 
         if (date !== undefined) {
-            const parsedDate = new Date(date);
-            if (isNaN(parsedDate.getTime())) {
-                return res.status(400).json({ message: 'تاریخ تراکنش نامعتبر است' });
-            }
-            const oneDayMs = 24 * 60 * 60 * 1000;
-            if (parsedDate.getTime() > Date.now() + oneDayMs) {
-                return res.status(400).json({ message: 'تاریخ تراکنش نمی‌تواند در آینده باشد' });
-            }
-            updateFields.date = parsedDate;
+            const d = parseTxDate(date);
+            if (!d) return res.status(400).json({ message: 'تاریخ تراکنش نامعتبر است یا در آینده است' });
+            update.date = d;
         }
 
         if (cardId !== undefined) {
-            if (cardId === null) {
-                updateFields.cardId = null;
-            } else {
-                try {
-                    updateFields.cardId = await resolveCardId(cardId, req.user.id);
-                } catch {
-                    return res.status(400).json({ message: 'کارت انتخاب‌شده معتبر نیست' });
-                }
+            try {
+                update.cardId = await resolveCardId(cardId, req.user.id);
+            } catch {
+                return res.status(400).json({ message: 'کارت انتخاب‌شده معتبر نیست' });
             }
         }
 
-        const updatedTx = await Transaction.findOneAndUpdate(
-            { _id: id, userId: req.user.id },
-            updateFields,
-            { new: true, runValidators: true }
-        );
+        const filter = { _id: id, userId: req.user.id };
+        const touchesTransferFields = amount !== undefined || cardId !== undefined;
+        if (touchesTransferFields) filter.transferId = null; // انتقال‌ها مبلغ/کارتشان قابل تغییر نیست
 
-        res.status(200).json({ message: 'تراکنش با موفقیت ویرایش شد', transaction: updatedTx });
+        const updated = await Transaction.findOneAndUpdate(filter, update, { new: true, runValidators: true }).lean();
+
+        if (!updated) {
+            const existing = await Transaction.findOne({ _id: id, userId: req.user.id }).select('_id').lean();
+            if (!existing) return res.status(404).json({ message: 'تراکنش مورد نظر یافت نشد' });
+            return res.status(400).json({
+                message: 'مبلغ و کارت انتقال قابل ویرایش نیست؛ انتقال را حذف و دوباره ثبت کن',
+            });
+        }
+
+        res.status(200).json({ message: 'تراکنش با موفقیت ویرایش شد', transaction: updated });
     } catch (error) {
-        res.status(500).json({ message: 'خطای سرور', error: error.message });
+        serverError(res, error);
     }
 };
 
 // ---------------------------------------------------------------------
 // حذف تراکنش
 // ---------------------------------------------------------------------
-
 exports.deleteTransaction = async (req, res) => {
     try {
         const { id } = req.params;
-
-        const transaction = await Transaction.findOne({ _id: id, userId: req.user.id });
-
-        if (!transaction) {
+        const userId = req.user.id;
+        if (!isId(id)) {
             return res.status(404).json({ message: 'تراکنش مورد نظر یافت نشد' });
         }
 
-        // حذف هر دو سمت انتقال
-        if (transaction.transferId) {
-            await Transaction.deleteMany({ transferId: transaction.transferId, userId: req.user.id });
-        } else if (transaction.type === 'LOAN') {
-            await Transaction.deleteMany({ loanId: transaction._id, userId: req.user.id });
+        const tx = await Transaction.findOne({ _id: id, userId }).select('type transferId').lean();
+        if (!tx) {
+            return res.status(404).json({ message: 'تراکنش مورد نظر یافت نشد' });
         }
 
-        await Transaction.deleteOne({ _id: id });
+        if (tx.transferId) {
+            await Transaction.deleteMany({ transferId: tx.transferId, userId });
+        } else if (tx.type === 'LOAN') {
+            await Transaction.deleteMany({ $or: [{ _id: tx._id }, { loanId: tx._id }], userId });
+        } else {
+            await Transaction.deleteOne({ _id: tx._id });
+        }
 
         res.status(200).json({ message: 'تراکنش با موفقیت حذف شد' });
     } catch (error) {
-        res.status(500).json({ message: 'خطای سرور', error: error.message });
+        serverError(res, error);
     }
 };
 
 // ---------------------------------------------------------------------
-// مقایسه ماه جاری با ماه قبل
+// مقایسه ماه جاری با ماه قبل — یک aggregate برای هر دو ماه
 // ---------------------------------------------------------------------
-
 exports.getMonthlyComparison = async (req, res) => {
     try {
-        const userId = req.user.id;
         const now = new Date();
+        const curStart = new Date(now.getFullYear(), now.getMonth(), 1);
+        const curEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
+        const prevStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
 
-        const currentMonthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-        const currentMonthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
-        const prevMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-        const prevMonthEnd = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59);
-
-        const [current, previous] = await Promise.all([
-            computeFinanceSummary(userId, currentMonthStart.toISOString(), currentMonthEnd.toISOString()),
-            computeFinanceSummary(userId, prevMonthStart.toISOString(), prevMonthEnd.toISOString()),
+        const rows = await Transaction.aggregate([
+            { $match: { userId: oid(req.user.id), date: { $gte: prevStart, $lte: curEnd } } },
+            {
+                $group: {
+                    _id: {
+                        cur: { $gte: ['$date', curStart] },
+                        type: '$type',
+                        isPaid: '$isPaid',
+                    },
+                    total: { $sum: '$amount' },
+                    count: { $sum: 1 },
+                },
+            },
         ]);
 
-        const calcChange = (curr, prev) => {
+        const split = (isCur) => summaryFromRows(
+            rows.filter(r => r._id.cur === isCur)
+                .map(r => ({ _id: { type: r._id.type, isPaid: r._id.isPaid }, total: r.total, count: r.count }))
+        );
+        const current = split(true);
+        const previous = split(false);
+
+        const change = (curr, prev) => {
             if (prev === 0) return curr > 0 ? 100 : 0;
             return Math.round(((curr - prev) / prev) * 100);
         };
+        const pick = (s) => ({ income: s.totalIncome, expense: s.totalExpense, cashBalance: s.cashBalance });
 
         res.status(200).json({
-            current: {
-                income: current.totalIncome,
-                expense: current.totalExpense,
-                cashBalance: current.cashBalance,
-            },
-            previous: {
-                income: previous.totalIncome,
-                expense: previous.totalExpense,
-                cashBalance: previous.cashBalance,
-            },
+            current: pick(current),
+            previous: pick(previous),
             changes: {
-                income: calcChange(current.totalIncome, previous.totalIncome),
-                expense: calcChange(current.totalExpense, previous.totalExpense),
-                cashBalance: calcChange(current.cashBalance, previous.cashBalance),
-            }
+                income: change(current.totalIncome, previous.totalIncome),
+                expense: change(current.totalExpense, previous.totalExpense),
+                cashBalance: change(current.cashBalance, previous.cashBalance),
+            },
         });
     } catch (error) {
-        res.status(500).json({ message: 'خطای سرور', error: error.message });
+        serverError(res, error);
     }
 };
 
 // ---------------------------------------------------------------------
-// خروجی CSV — ستون کارت اضافه شد
+// خروجی CSV — سقف ردیف، lean، فرمتر تاریخ یک‌بار ساخته می‌شود
 // ---------------------------------------------------------------------
+const csvCell = (val) => `"${String(val ?? '').replace(/"/g, '""')}"`;
 
 exports.exportTransactionsCSV = async (req, res) => {
     try {
-        const search = req.query.search?.trim();
-        const fromDate = req.query.from;
-        const toDate = req.query.to;
+        const filter = buildListFilter(req);
+        if (!filter) return res.status(400).json({ message: 'کارت انتخاب‌شده معتبر نیست' });
+        delete filter.type; // رفتار قبلی: CSV فیلتر نوع نداشت
 
-        const filter = { userId: req.user.id, ...buildDateMatch(fromDate, toDate) };
-
-        if (req.query.cardId === 'none') {
-            filter.cardId = null;
-        } else if (req.query.cardId) {
-            filter.cardId = new mongoose.Types.ObjectId(req.query.cardId);
-        }
-
-        if (search) {
-            filter.$or = [
-                { title: { $regex: search, $options: 'i' } },
-                { description: { $regex: search, $options: 'i' } },
-            ];
-        }
-
-        const [transactions, categoryMap, cards] = await Promise.all([
-            Transaction.find(filter).sort({ date: -1 }),
-            getUserCategoryMap(req.user.id),
-            Card.find({ userId: req.user.id }).lean(),
+        const [transactions, cards] = await Promise.all([
+            Transaction.find(filter)
+                .select('title type category cardId amount description date isPaid')
+                .sort({ date: -1 })
+                .limit(MAX_CSV_ROWS)
+                .lean(),
+            Card.find({ userId: req.user.id }).select('name').lean(),
         ]);
 
-        const cardMap = new Map();
-        cards.forEach(c => cardMap.set(c._id.toString(), c.name));
+        const categoryMap = await loadCategoryInfo(req.user.id, transactions.map(t => t.category));
+        const cardNames = new Map(cards.map(c => [String(c._id), c.name]));
 
-      const typeLabel = (type) => {
-    const map = {
-        INCOME: 'درآمد',
-        EXPENSE: 'خرج',
-        INSTALLMENT: 'قسط',
-        LOAN: 'وام',
-        GOAL_DEPOSIT: 'واریز به هدف',
-        TRANSFER_IN: 'انتقال ورودی',
-        TRANSFER_OUT: 'انتقال خروجی',
-    };
-    return map[type] || type;
-};
-        const categoryLabel = (catId) => {
-            const info = lookupCategoryInfo(catId, categoryMap);
-            return info ? `${info.icon} ${info.label}` : '-';
+        const dateFmt = new Intl.DateTimeFormat('fa-IR');
+        const dateCache = new Map(); // کش بر اساس روز — فرمت تاریخ گران است
+        const fmtDate = (d) => {
+            const t = new Date(d);
+            const key = Math.floor(t.getTime() / DAY_MS);
+            let s = dateCache.get(key);
+            if (s === undefined) { s = dateFmt.format(t); dateCache.set(key, s); }
+            return s;
         };
 
-        const escape = (val) => `"${String(val ?? '').replace(/"/g, '""')}"`;
-
-        const rows = [
-            ['ردیف', 'عنوان', 'نوع', 'دسته‌بندی', 'کارت', 'مبلغ (ریال)', 'توضیحات', 'تاریخ', 'وضعیت پرداخت'].join(','),
-            ...transactions.map((tx, i) => {
-                const date = new Date(tx.date).toLocaleDateString('fa-IR');
-                const isPaid = tx.type === 'INSTALLMENT'
-                    ? (tx.isPaid ? 'پرداخت شده' : 'پرداخت نشده')
-                    : '-';
-                const cardName = tx.cardId ? (cardMap.get(tx.cardId.toString()) || '-') : '-';
-                return [
-                    i + 1,
-                    escape(tx.title),
-                    escape(typeLabel(tx.type)),
-                    escape(categoryLabel(tx.category)),
-                    escape(cardName),
-                    tx.amount,
-                    escape(tx.description || ''),
-                    escape(date),
-                    escape(isPaid),
-                ].join(',');
-            }),
-        ].join('\n');
-
-        const csv = '\uFEFF' + rows;
+        const lines = ['ردیف,عنوان,نوع,دسته‌بندی,کارت,مبلغ (ریال),توضیحات,تاریخ,وضعیت پرداخت'];
+        transactions.forEach((tx, i) => {
+            const info = lookupCategoryInfo(tx.category, categoryMap);
+            const paid = tx.type === 'INSTALLMENT' ? (tx.isPaid ? 'پرداخت شده' : 'پرداخت نشده') : '-';
+            lines.push([
+                i + 1,
+                csvCell(tx.title),
+                csvCell(TYPE_LABELS[tx.type] || tx.type),
+                csvCell(info ? `${info.icon} ${info.label}` : '-'),
+                csvCell(tx.cardId ? (cardNames.get(String(tx.cardId)) || '-') : '-'),
+                tx.amount,
+                csvCell(tx.description || ''),
+                csvCell(fmtDate(tx.date)),
+                csvCell(paid),
+            ].join(','));
+        });
 
         res.setHeader('Content-Type', 'text/csv; charset=utf-8');
         res.setHeader('Content-Disposition', `attachment; filename="sablo-transactions-${Date.now()}.csv"`);
-        res.status(200).send(csv);
+        res.status(200).send('﻿' + lines.join('\n'));
     } catch (error) {
-        res.status(500).json({ message: 'خطای سرور', error: error.message });
+        serverError(res, error);
     }
 };
 
 // ---------------------------------------------------------------------
 // نمای کلی چند ماه اخیر
 // ---------------------------------------------------------------------
-
 exports.getMonthlyOverview = async (req, res) => {
     try {
-        const userId = new mongoose.Types.ObjectId(req.user.id);
+        const userId = oid(req.user.id);
         const monthsCount = Math.min(Math.max(parseInt(req.query.months) || 6, 1), 24);
 
         const now = new Date();
         const startRange = new Date(now.getFullYear(), now.getMonth() - (monthsCount - 1), 1);
+        const match = { userId, date: { $gte: startRange } };
 
-        const matchBase = { userId, date: { $gte: startRange } };
-
-        if (req.query.cardId) {
-            const card = await Card.findOne({ _id: req.query.cardId, userId: req.user.id });
-            if (!card) {
+        const { cardId } = req.query;
+        if (cardId) {
+            if (!isId(cardId) || !(await Card.exists({ _id: cardId, userId: req.user.id }))) {
                 return res.status(400).json({ message: 'کارت انتخاب‌شده معتبر نیست' });
             }
-            matchBase.cardId = card._id;
+            match.cardId = oid(cardId);
         }
 
         const stats = await Transaction.aggregate([
-            { $match: matchBase },
+            { $match: match },
             {
                 $group: {
-                    _id: {
-                        year: { $year: '$date' },
-                        month: { $month: '$date' },
-                        type: '$type',
-                    },
+                    _id: { year: { $year: '$date' }, month: { $month: '$date' }, type: '$type' },
                     totalAmount: {
                         $sum: {
                             $cond: [
@@ -741,93 +667,60 @@ exports.getMonthlyOverview = async (req, res) => {
             },
         ]);
 
-        // ── جمع مبالغ هر ماه به تفکیک نوع تراکنش ─────────────────────────
-        const emptyMonth = () => ({
-            INCOME: 0,
-            EXPENSE: 0,
-            LOAN: 0,
-            INSTALLMENT: 0,
-            GOAL_DEPOSIT: 0,
-            TRANSFER_IN: 0,
-            TRANSFER_OUT: 0,
-        });
+        const byMonth = new Map();
+        for (const { _id, totalAmount } of stats) {
+            const key = `${_id.year}-${_id.month}`;
+            let m = byMonth.get(key);
+            if (!m) { m = {}; byMonth.set(key, m); }
+            m[_id.type] = totalAmount;
+        }
 
-        const monthsMap = {};
-        stats.forEach(item => {
-            const { year, month, type } = item._id;
-            const key = `${year}-${month}`;
-            if (!monthsMap[key]) monthsMap[key] = emptyMonth();
-            if (type in monthsMap[key]) {
-                monthsMap[key][type] = item.totalAmount;
-            }
-        });
-
-        // ── ساخت خروجی ماه‌به‌ماه ────────────────────────────────────────
-        const result = [];
-        for (let i = 0; i < monthsCount; i++) {
+        const months = [];
+        for (let i = monthsCount - 1; i >= 0; i--) {
             const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
-            const key = `${d.getFullYear()}-${d.getMonth() + 1}`;
-            const data = monthsMap[key] || emptyMonth();
+            const m = byMonth.get(`${d.getFullYear()}-${d.getMonth() + 1}`) || {};
+            const g = (k) => m[k] || 0;
 
-            const moneyIn = data.INCOME + data.LOAN + data.TRANSFER_IN;
-            const moneyOut =
-                data.EXPENSE + data.INSTALLMENT + data.GOAL_DEPOSIT + data.TRANSFER_OUT;
-
-            result.push({
+            months.push({
                 year: d.getFullYear(),
                 month: d.getMonth() + 1,
-                from: new Date(d.getFullYear(), d.getMonth(), 1),
+                from: d,
                 to: new Date(d.getFullYear(), d.getMonth() + 1, 0, 23, 59, 59),
-                income: data.INCOME,
-                expense: data.EXPENSE,
-                transferIn: data.TRANSFER_IN,
-                transferOut: data.TRANSFER_OUT,
-                balance: moneyIn - moneyOut,
+                income: g('INCOME'),
+                expense: g('EXPENSE'),
+                transferIn: g('TRANSFER_IN'),
+                transferOut: g('TRANSFER_OUT'),
+                balance: (g('INCOME') + g('LOAN') + g('TRANSFER_IN')) -
+                    (g('EXPENSE') + g('INSTALLMENT') + g('GOAL_DEPOSIT') + g('TRANSFER_OUT')),
             });
         }
 
-        result.reverse();
-
-        res.status(200).json({ months: result });
+        res.status(200).json({ months });
     } catch (error) {
-        res.status(500).json({ message: 'خطای سرور', error: error.message });
+        serverError(res, error);
     }
 };
 
 // ---------------------------------------------------------------------
-// ساخت وام + اقساط
-// تاریخ سررسید همه اقساط از فرانت میاد (installmentDates) و اینجا فقط
-// اعتبارسنجی و ذخیره میشه؛ هیچ محاسبه‌ی تاریخی (مثل setMonth) در بک‌اند نیست.
+// ساخت وام + اقساط (تاریخ‌ها از فرانت می‌آید)
 // ---------------------------------------------------------------------
-
 exports.createLoanWithInstallments = async (req, res) => {
     try {
-        const {
-            title,
-            totalAmount,
-            installmentCount,
-            installmentAmount,
-            installmentDates,
-            description,
-            cardId,
-        } = req.body;
-
+        const { title, totalAmount, installmentCount, installmentAmount, installmentDates, description, cardId } = req.body;
         const count = Number(installmentCount);
 
         if (!title || !String(title).trim()) {
             return res.status(400).json({ message: 'نام وام الزامی است' });
         }
-        if (!totalAmount || totalAmount <= 0) {
+        if (!(totalAmount > 0)) {
             return res.status(400).json({ message: 'مبلغ کل وام باید بیشتر از صفر باشد' });
         }
         if (!Number.isInteger(count) || count < 1 || count > 360) {
             return res.status(400).json({ message: 'تعداد اقساط باید بین ۱ تا ۳۶۰ باشد' });
         }
-        if (!installmentAmount || installmentAmount <= 0) {
+        if (!(installmentAmount > 0)) {
             return res.status(400).json({ message: 'مبلغ هر قسط باید بیشتر از صفر باشد' });
         }
-
-        // ── تاریخ اقساط ──────────────────────────────────────────────────
         if (!Array.isArray(installmentDates) || installmentDates.length !== count) {
             return res.status(400).json({ message: 'تاریخ اقساط الزامی است و باید با تعداد اقساط برابر باشد' });
         }
@@ -842,161 +735,146 @@ exports.createLoanWithInstallments = async (req, res) => {
             }
         }
 
-        let resolvedCardId = null;
+        let resolvedCardId;
         try {
             resolvedCardId = await resolveCardId(cardId, req.user.id);
         } catch {
             return res.status(400).json({ message: 'کارت انتخاب‌شده معتبر نیست' });
         }
 
+        const now = new Date();
         const firstDueDate = dueDates[0];
-        const lastDueDate  = dueDates[dueDates.length - 1];
-        const cleanTitle   = String(title).trim();
+        const lastDueDate = dueDates[count - 1];
+        const cleanTitle = String(title).trim();
 
-        // ── تراکنش اصلی وام ──────────────────────────────────────────────
         const loanTx = await Transaction.create({
-            userId:      req.user.id,
-            type:        'LOAN',
-            amount:      totalAmount,
-            title:       cleanTitle,
-            description: description?.trim() || '',
-            date:        new Date(),
-            dueDate:     lastDueDate,
-            isPaid:      true,
-            loanId:      null,
-            category:    null,
-            cardId:      resolvedCardId,
+            userId: req.user.id,
+            type: 'LOAN',
+            amount: totalAmount,
+            title: cleanTitle,
+            description: description?.trim?.() || '',
+            date: now,
+            dueDate: lastDueDate,
+            isPaid: true,
+            loanId: null,
+            category: null,
+            cardId: resolvedCardId,
         });
 
-        // ── اقساط ────────────────────────────────────────────────────────
-        const installments = dueDates.map((dueDate, i) => ({
-            userId:      req.user.id,
-            type:        'INSTALLMENT',
-            amount:      installmentAmount,
-            title:       `${cleanTitle} — قسط ${i + 1} از ${count}`,
-            description: '',
-            date:        new Date(),
-            dueDate,
-            isPaid:      false,
-            loanId:      loanTx._id,
-            category:    null,
-            cardId:      resolvedCardId,
-        }));
-
         try {
-            await Transaction.insertMany(installments);
+            await Transaction.insertMany(dueDates.map((dueDate, i) => ({
+                userId: req.user.id,
+                type: 'INSTALLMENT',
+                amount: installmentAmount,
+                title: `${cleanTitle} — قسط ${i + 1} از ${count}`,
+                description: '',
+                date: now,
+                dueDate,
+                isPaid: false,
+                loanId: loanTx._id,
+                category: null,
+                cardId: resolvedCardId,
+            })), { lean: true });
         } catch (insertError) {
-            // اگه ساخت اقساط شکست خورد، وام نیمه‌کاره باقی نمونه
-            await Transaction.deleteOne({ _id: loanTx._id });
+            await Transaction.deleteOne({ _id: loanTx._id }); // وام نیمه‌کاره نماند
             throw insertError;
         }
 
         res.status(201).json({
             message: `وام با ${count} قسط با موفقیت ثبت شد`,
             loan: {
-                _id:              loanTx._id,
-                title:            loanTx.title,
+                _id: loanTx._id,
+                title: loanTx.title,
                 totalAmount,
                 installmentCount: count,
                 installmentAmount,
                 firstDueDate,
                 lastDueDate,
-                cardId:           resolvedCardId,
+                cardId: resolvedCardId,
             },
         });
     } catch (error) {
-        res.status(500).json({ message: 'خطای سرور', error: error.message });
+        serverError(res, error);
     }
 };
 
 // ---------------------------------------------------------------------
-// لیست وام‌ها
+// لیست وام‌ها — یک گذر روی اقساط
 // ---------------------------------------------------------------------
-
 exports.getLoans = async (req, res) => {
     try {
         const userId = req.user.id;
 
         const loans = await Transaction.find({ userId, type: 'LOAN' })
-            .sort({ date: -1 }).lean();
+            .select('title description date cardId amount')
+            .sort({ date: -1 })
+            .lean();
 
         if (loans.length === 0) {
             return res.status(200).json({ loans: [] });
         }
 
-        const loanIds = loans.map(l => l._id);
+        const [installments, cards] = await Promise.all([
+            Transaction.find({ userId, type: 'INSTALLMENT', loanId: { $in: loans.map(l => l._id) } })
+                .select('title amount dueDate isPaid date loanId')
+                .sort({ dueDate: 1 })
+                .lean(),
+            Card.find({ userId }).select('name icon color').lean(),
+        ]);
 
-        const allInstallments = await Transaction.find({
-            userId,
-            type:   'INSTALLMENT',
-            loanId: { $in: loanIds },
-        }).sort({ dueDate: 1 }).lean();
+        const byLoan = new Map();
+        for (const inst of installments) {
+            const key = String(inst.loanId);
+            const arr = byLoan.get(key);
+            if (arr) arr.push(inst); else byLoan.set(key, [inst]);
+        }
 
-        const installmentsByLoan = {};
-        allInstallments.forEach(inst => {
-            const key = inst.loanId.toString();
-            if (!installmentsByLoan[key]) installmentsByLoan[key] = [];
-            installmentsByLoan[key].push(inst);
-        });
-
-        const cards = await Card.find({ userId }).lean();
-        const cardMap = new Map();
-        cards.forEach(c => cardMap.set(c._id.toString(), { name: c.name, icon: c.icon, color: c.color }));
+        const cardMap = new Map(cards.map(c => [String(c._id), { name: c.name, icon: c.icon, color: c.color }]));
 
         const result = loans.map(loan => {
-            const insts    = installmentsByLoan[loan._id.toString()] || [];
-            const total    = insts.length;
-            const paid     = insts.filter(i => i.isPaid).length;
-            const unpaid   = insts.filter(i => !i.isPaid);
-            const nextInst = unpaid[0] || null;
-
-    const paidAmount  = insts.filter(i => i.isPaid).reduce((sum, i) => sum + i.amount, 0);
-    const totalAmount = insts.reduce((sum, i) => sum + i.amount, 0);
-
-            const cardInfo = loan.cardId ? (cardMap.get(loan.cardId.toString()) || null) : null;
+            const insts = byLoan.get(String(loan._id)) || [];
+            let paid = 0, paidAmount = 0, totalAmount = 0, next = null;
+            for (const i of insts) {
+                totalAmount += i.amount;
+                if (i.isPaid) { paid++; paidAmount += i.amount; }
+                else if (!next) next = i;
+            }
+            const total = insts.length;
 
             return {
-                _id:              loan._id,
-                title:            loan.title,
-                description:      loan.description,
-                date:             loan.date,
-                cardId:           loan.cardId,
-                cardInfo,
-                totalLoanAmount:  loan.amount,
+                _id: loan._id,
+                title: loan.title,
+                description: loan.description,
+                date: loan.date,
+                cardId: loan.cardId,
+                cardInfo: loan.cardId ? (cardMap.get(String(loan.cardId)) || null) : null,
+                totalLoanAmount: loan.amount,
                 totalAmount,
                 paidAmount,
-                remainingAmount:  totalAmount - paidAmount,
+                remainingAmount: totalAmount - paidAmount,
                 installmentCount: total,
-                paidCount:        paid,
-                unpaidCount:      unpaid.length,
-                progressPercent:  total > 0 ? Math.round((paid / total) * 100) : 0,
-                isFullyPaid:      total > 0 && paid === total,
-                nextInstallment:  nextInst ? {
-                    _id:     nextInst._id,
-                    amount:  nextInst.amount,
-                    dueDate: nextInst.dueDate,
-                    title:   nextInst.title,
-                } : null,
-                installments: insts.map(inst => ({
-                    _id:     inst._id,
-                    title:   inst.title,
-                    amount:  inst.amount,
-                    dueDate: inst.dueDate,
-                    isPaid:  inst.isPaid,
-                    date:    inst.date,
+                paidCount: paid,
+                unpaidCount: total - paid,
+                progressPercent: total > 0 ? Math.round((paid / total) * 100) : 0,
+                isFullyPaid: total > 0 && paid === total,
+                nextInstallment: next
+                    ? { _id: next._id, amount: next.amount, dueDate: next.dueDate, title: next.title }
+                    : null,
+                installments: insts.map(i => ({
+                    _id: i._id, title: i.title, amount: i.amount, dueDate: i.dueDate, isPaid: i.isPaid, date: i.date,
                 })),
             };
         });
 
         res.status(200).json({ loans: result });
     } catch (error) {
-        res.status(500).json({ message: 'خطای سرور', error: error.message });
+        serverError(res, error);
     }
 };
+
 exports.getUnpaidInstallments = async (req, res) => {
     try {
-        const since = new Date();
-        since.setDate(since.getDate() - 1);
+        const since = new Date(Date.now() - DAY_MS);
 
         const installments = await Transaction.find({
             userId: req.user.id,
@@ -1011,82 +889,12 @@ exports.getUnpaidInstallments = async (req, res) => {
 
         res.status(200).json({ installments });
     } catch (error) {
-        res.status(500).json({ message: 'خطای سرور', error: error.message });
+        serverError(res, error);
     }
 };
-
-
-exports.calculateDong = async (req, res) => {
-    try {
-        const { participants } = req.body;
-
-        if (!Array.isArray(participants) || participants.length < 2 || participants.length > 30) {
-            return res.status(400).json({ message: 'تعداد افراد باید بین ۲ تا ۳۰ باشد' });
-        }
-
-        for (const p of participants) {
-            if (!String(p.name ?? '').trim()) {
-                return res.status(400).json({ message: 'نام همه افراد الزامی است' });
-            }
-            if (!Number.isInteger(p.paid) || p.paid < 0) {
-                return res.status(400).json({ message: 'مبلغ پرداختی باید عدد صحیح و غیرمنفی باشد' });
-            }
-            if (p.weight !== undefined && (!Number.isInteger(p.weight) || p.weight < 1)) {
-                return res.status(400).json({ message: 'وزن سهم نامعتبر است' });
-            }
-        }
-
-        const result = calculateDong(participants);
-        if (result.total === 0) {
-            return res.status(400).json({ message: 'جمع هزینه‌ها صفر است' });
-        }
-
-        res.status(200).json({ ...result, settlementsCount: result.settlements.length });
-    } catch (error) {
-        res.status(500).json({ message: 'خطای سرور', error: error.message });
-    }
-};
-
-// ثبت سهم خودم از دنگ به‌عنوان خرج در حسابداری
-exports.saveDongAsExpense = async (req, res) => {
-    try {
-        const { title, myShare, category, cardId } = req.body;
-
-        if (!Number.isInteger(myShare) || myShare <= 0) {
-            return res.status(400).json({ message: 'مبلغ سهم نامعتبر است' });
-        }
-
-        const categoryMap = await getUserCategoryMap(req.user.id);
-        let resolvedCardId = null;
-        try {
-            resolvedCardId = await resolveCardId(cardId, req.user.id);
-        } catch {
-            return res.status(400).json({ message: 'کارت انتخاب‌شده معتبر نیست' });
-        }
-
-        const tx = await Transaction.create({
-            userId: req.user.id,
-            type: 'EXPENSE',
-            amount: myShare,
-            title: title?.trim() || 'دنگ',
-            description: 'ثبت‌شده از ماشین‌حساب دنگی',
-            date: new Date(),
-            category: resolveCategoryId(category, categoryMap),
-            cardId: resolvedCardId,
-            isPaid: true,
-        });
-
-        res.status(201).json({ message: 'سهم شما به‌عنوان خرج ثبت شد', transaction: tx });
-    } catch (error) {
-        res.status(500).json({ message: 'خطای سرور', error: error.message });
-    }
-};
-
-
-
 
 // ---------------------------------------------------------------------
-// انتقال بین دو کارت
+// انتقال بین دو کارت — یک کوئری برای هر دو کارت
 // ---------------------------------------------------------------------
 exports.createTransfer = async (req, res) => {
     try {
@@ -1102,45 +910,36 @@ exports.createTransfer = async (req, res) => {
         if (String(fromCardId) === String(toCardId)) {
             return res.status(400).json({ message: 'کارت مبدا و مقصد نمی‌تواند یکی باشد' });
         }
-
-        let txDate = new Date();
-        if (date) {
-            const parsedDate = new Date(date);
-            if (isNaN(parsedDate.getTime())) {
-                return res.status(400).json({ message: 'تاریخ تراکنش نامعتبر است' });
-            }
-            if (parsedDate.getTime() > Date.now() + 24 * 60 * 60 * 1000) {
-                return res.status(400).json({ message: 'تاریخ تراکنش نمی‌تواند در آینده باشد' });
-            }
-            txDate = parsedDate;
+        if (!isId(fromCardId) || !isId(toCardId)) {
+            return res.status(400).json({ message: 'کارت انتخاب‌شده معتبر نیست' });
         }
 
-        const [fromCard, toCard] = await Promise.all([
-            Card.findOne({ _id: fromCardId, userId }).lean(),
-            Card.findOne({ _id: toCardId, userId }).lean(),
-        ]);
+        const txDate = parseTxDate(date);
+        if (!txDate) {
+            return res.status(400).json({ message: 'تاریخ تراکنش نامعتبر است یا در آینده است' });
+        }
+
+        const found = await Card.find({ _id: { $in: [fromCardId, toCardId] }, userId }).select('name').lean();
+        const fromCard = found.find(c => String(c._id) === String(fromCardId));
+        const toCard = found.find(c => String(c._id) === String(toCardId));
         if (!fromCard || !toCard) {
             return res.status(400).json({ message: 'کارت انتخاب‌شده معتبر نیست' });
         }
 
         const transferId = new mongoose.Types.ObjectId();
-        const cleanDesc = description?.trim() || '';
+        const desc = description?.trim?.() || '';
 
         try {
             const [outTx, inTx] = await Transaction.insertMany([
                 {
                     userId, type: 'TRANSFER_OUT', amount,
-                    title: `انتقال به ${toCard.name}`,
-                    description: cleanDesc,
-                    date: txDate, cardId: fromCard._id,
-                    category: null, isPaid: true, transferId,
+                    title: `انتقال به ${toCard.name}`, description: desc,
+                    date: txDate, cardId: fromCard._id, category: null, isPaid: true, transferId,
                 },
                 {
                     userId, type: 'TRANSFER_IN', amount,
-                    title: `انتقال از ${fromCard.name}`,
-                    description: cleanDesc,
-                    date: txDate, cardId: toCard._id,
-                    category: null, isPaid: true, transferId,
+                    title: `انتقال از ${fromCard.name}`, description: desc,
+                    date: txDate, cardId: toCard._id, category: null, isPaid: true, transferId,
                 },
             ]);
 
@@ -1150,11 +949,10 @@ exports.createTransfer = async (req, res) => {
                 transactions: [outTx, inTx],
             });
         } catch (insertError) {
-            // جلوگیری از ثبت نیمه‌کاره
-            await Transaction.deleteMany({ transferId, userId });
+            await Transaction.deleteMany({ transferId, userId }); // ثبت نیمه‌کاره نماند
             throw insertError;
         }
     } catch (error) {
-        res.status(500).json({ message: 'خطای سرور', error: error.message });
+        serverError(res, error);
     }
 };
